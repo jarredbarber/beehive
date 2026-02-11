@@ -370,4 +370,10 @@ export class LocalTaskStore implements TaskStore {
       return apiKey;
     });
   }
+
+  async listProjects(): Promise<string[]> {
+    return this.withLock(async (data) => {
+      return Object.keys(data.projects);
+    });
+  }
 }

@@ -95,5 +95,5 @@ export interface TaskStore {
   createKey(project: string, role: 'admin' | 'bee', label?: string): Promise<{ key: string; apiKey: ApiKey }>;
   listKeys(project: string): Promise<ApiKey[]>;
   revokeKey(project: string, keyHash: string): Promise<boolean>;
-  getApiKey(keyHash: string): Promise<ApiKey | null>;
+  listProjects(): Promise<string[]>;
 }

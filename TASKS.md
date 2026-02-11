@@ -35,10 +35,10 @@ This document tracks the tasks required to implement the distributed Beehive arc
 - [x] Implement dump/load bulk operations
 
 ## Phase 6: GitHub Integration & Webhooks
-- [ ] Implement GitHub webhook handler
-    - [ ] Signature verification
-    - [ ] Handle `pull_request.closed` (merged) event
-    - [ ] Auto-execute pending submissions on merge
+- [x] Implement GitHub webhook handler
+    - [x] Signature verification
+    - [x] Handle `pull_request.closed` (merged) event
+    - [x] Auto-execute pending submissions on merge
 - [ ] Add `octokit` integration to server for:
     - [ ] PR commenting on rejection
     - [ ] Auto-merge on approval (optional/configurable)

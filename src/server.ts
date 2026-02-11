@@ -1,4 +1,5 @@
 import fastify from 'fastify';
+import { createHmac } from 'crypto';
 import { LocalTaskStore } from './store/local.js';
 import { TaskState } from './types.js';
 import { hashKey } from './auth.js';
@@ -281,6 +282,60 @@ server.delete<{ Params: { hash: string } }>('/keys/:hash', async (request, reply
   const success = await store.revokeKey(query.project, hash);
   return { success };
 });
+
+// POST /webhooks/github
+server.post('/webhooks/github', async (request, reply) => {
+  // 1. Verify GitHub signature
+  const signature = request.headers['x-hub-signature-256'] as string;
+  const payload = JSON.stringify(request.body);
+  
+  if (!verifyGitHubSignature(payload, signature)) {
+    return reply.status(401).send({ error: 'Invalid signature' });
+  }
+
+  const event = request.body as any;
+  
+  // 2. Handle pull_request events
+  if (event.action === 'closed' && event.pull_request?.merged) {
+    const prUrl = event.pull_request.html_url;
+    
+    // 3. Find task with matching prUrl in pending_review state
+    const allProjects = await store.listProjects();
+    
+    for (const projectName of allProjects) {
+      const tasks = await store.listTasks(projectName, { state: TaskState.PENDING_REVIEW });
+      const matchingTask = tasks.find(t => t.prUrl === prUrl);
+      
+      if (matchingTask) {
+        // 4. Auto-execute submission
+        await store.approveTask(projectName, matchingTask.id);
+        console.log(`✅ Auto-executed submission for ${matchingTask.id} (PR merged)`);
+        return reply.status(200).send({ message: 'Submission executed', taskId: matchingTask.id });
+      }
+    }
+    
+    return reply.status(200).send({ message: 'No matching task found' });
+  }
+  
+  // Other events: ignore
+  return reply.status(200).send({ message: 'Event ignored' });
+});
+
+// Signature verification helper
+function verifyGitHubSignature(payload: string, signature: string): boolean {
+  if (!signature) return false;
+  
+  const secret = process.env.GITHUB_WEBHOOK_SECRET || '';
+  if (!secret) {
+    console.warn('⚠️  GITHUB_WEBHOOK_SECRET not set - webhook verification disabled');
+    return true; // Allow in development
+  }
+  
+  const hmac = createHmac('sha256', secret);
+  const digest = 'sha256=' + hmac.update(payload).digest('hex');
+  
+  return signature === digest;
+}
 
 const start = async () => {
   try {

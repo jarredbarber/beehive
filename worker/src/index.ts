@@ -413,4 +413,92 @@ app.post('/projects/:name/load', async (c) => {
   return c.json({ success: true });
 });
 
+// Signature verification for Worker
+async function verifyGitHubSignature(payload: string, signature: string | null, secret: string): Promise<boolean> {
+  if (!signature) return false;
+  if (!secret) return true; // Development mode
+  
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+  const digest = 'sha256=' + Array.from(new Uint8Array(sig))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  
+  return signature === digest;
+}
+
+// POST /webhooks/github
+app.post('/webhooks/github', async (c) => {
+  const body = await c.req.json() as any;
+  const signature = c.req.header('x-hub-signature-256') || null;
+  
+  // Verify signature
+  const secret = c.env.GITHUB_WEBHOOK_SECRET || '';
+  if (!await verifyGitHubSignature(JSON.stringify(body), signature, secret)) {
+    return c.json({ error: 'Invalid signature' }, 401);
+  }
+
+  // Handle PR merge
+  if (body.action === 'closed' && body.pull_request?.merged) {
+    const prUrl = body.pull_request.html_url;
+    
+    // Find all projects
+    const projectsResult = await c.env.DB.prepare('SELECT DISTINCT project FROM tasks').all();
+    const projects = projectsResult.results.map((r: any) => r.project);
+    
+    for (const project of projects) {
+      const { results: tasks } = await c.env.DB.prepare(
+        'SELECT * FROM tasks WHERE project = ? AND state = "pending_review"'
+      ).bind(project).all();
+
+      const matchingTask = tasks.find((t: any) => t.pr_url === prUrl);
+      
+      if (matchingTask) {
+        // Auto-execute submission
+        const id = matchingTask.id;
+        const submission = await c.env.DB.prepare('SELECT * FROM submissions WHERE task_id = ?').bind(id).first<any>();
+        
+        if (submission) {
+          const statements = [
+            c.env.DB.prepare('UPDATE tasks SET state = "closed", summary = ?, details = ?, pr_url = ?, updated_at = datetime("now") WHERE id = ?')
+              .bind(submission.summary, submission.details, submission.pr_url, id),
+            c.env.DB.prepare('UPDATE tasks SET state = "closed", updated_at = datetime("now") WHERE reviews_task = ?').bind(id),
+            c.env.DB.prepare('DELETE FROM submissions WHERE task_id = ?').bind(id)
+          ];
+
+          const followUps = JSON.parse(submission.follow_up_tasks || '[]');
+          for (const fu of followUps) {
+            const fuId = `${matchingTask.project}-${generateSuffix()}`;
+            statements.push(
+              c.env.DB.prepare('INSERT INTO tasks (id, project, description, role, priority, parent_task) VALUES (?, ?, ?, ?, ?, ?)')
+                .bind(fuId, matchingTask.project, fu.description, fu.role, fu.priority || 2, id)
+            );
+            if (fu.dependencies && Array.isArray(fu.dependencies)) {
+              for (const depId of fu.dependencies) {
+                statements.push(
+                  c.env.DB.prepare('INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)')
+                    .bind(fuId, depId)
+                );
+              }
+            }
+          }
+
+          await c.env.DB.batch(statements);
+          return c.json({ message: 'Submission executed', taskId: id });
+        }
+      }
+    }
+  }
+
+  return c.json({ message: 'Event processed' });
+});
+
 export default app;

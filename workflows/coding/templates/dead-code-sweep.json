@@ -1,5 +1,0 @@
-{
-  "description": "Dead code sweep\nReview codebase for unused code, deprecated functions, and unreferenced imports. Remove or mark for deprecation.",
-  "role": "code",
-  "priority": 3
-}
