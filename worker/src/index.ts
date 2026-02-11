@@ -143,6 +143,22 @@ function generateKey(role: 'admin' | 'bee'): string {
   return `${prefix}${randomPart}`;
 }
 
+// Helper to format task for CLI (snake_case -> camelCase)
+function formatTask(task: any) {
+  if (!task) return task;
+  return {
+    ...task,
+    createdAt: task.created_at,
+    updatedAt: task.updated_at,
+    claimedBy: task.claimed_by,
+    prUrl: task.pr_url,
+    parentTask: task.parent_task,
+    reviewsTask: task.reviews_task,
+    testCommand: task.test_command,
+    // dependencies is handled separately as it comes from a different table
+  };
+}
+
 // POST /projects
 app.post('/projects', async (c) => {
   const body = await c.req.json<{ name: string; repo?: string; config?: string }>();
@@ -176,7 +192,7 @@ app.get('/tasks', async (c) => {
 
   if (!project) return c.json({ error: 'Project is required' }, 400);
 
-  let query = 'SELECT * FROM tasks WHERE project = ?';
+  let query = 'SELECT *, created_at as createdAt, updated_at as updatedAt, claimed_by as claimedBy, pr_url as prUrl, parent_task as parentTask, reviews_task as reviewsTask FROM tasks WHERE project = ?';
   const params: any[] = [project];
 
   if (state) {
@@ -189,7 +205,7 @@ app.get('/tasks', async (c) => {
   }
 
   const { results } = await c.env.DB.prepare(query).bind(...params).all();
-  return c.json(results);
+  return c.json(results.map(formatTask));
 });
 
 // POST /tasks
@@ -479,7 +495,7 @@ app.post('/projects/:name/load', async (c) => {
     for (const task of body.tasks) {
       statements.push(c.env.DB.prepare(
         'INSERT INTO tasks (id, project, description, role, state, priority, created_at, updated_at, claimed_by, summary, details, status, pr_url, parent_task, reviews_task) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      ).bind(task.id, name, task.description, task.role, task.state, task.priority, task.created_at, task.updated_at, task.claimed_by, task.summary, task.details, task.status, task.pr_url, task.parent_task, task.reviews_task));
+      ).bind(task.id, name, task.description, task.role, task.state, task.priority, task.created_at || task.createdAt, task.updated_at || task.updatedAt, task.claimed_by || task.claimedBy, task.summary, task.details, task.status, task.pr_url || task.prUrl, task.parent_task || task.parentTask, task.reviews_task || task.reviewsTask));
     }
   }
 

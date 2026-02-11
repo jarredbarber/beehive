@@ -9,17 +9,17 @@ const __dirname = dirname(__filename);
 
 export function registerInitCommand(program: Command) {
   program
-    .command('init')
+    .command('init [name]')
     .description('Initialize bh in current project')
     .option('--with-agents', 'Install agent configurations for bh worker (coding workflow)')
     .option('--with-skill', 'Install beehive.skill.md for skill integration')
     .option('--server <url>', 'Beehive server URL (e.g., https://hive.example.com)')
     .option('--repo <repo>', 'GitHub repository (format: owner/repo-name)')
-    .action(async (options) => {
+    .action(async (name, options) => {
       try {
         // If --server is provided, bootstrap on remote hive
         if (options.server) {
-          await bootstrapRemoteProject(options.server, options.repo);
+          await bootstrapRemoteProject(options.server, name, options.repo);
           return;
         }
 
@@ -56,9 +56,9 @@ export function registerInitCommand(program: Command) {
     });
 }
 
-async function bootstrapRemoteProject(server: string, repo?: string) {
+async function bootstrapRemoteProject(server: string, name?: string, repo?: string) {
   const cwd = process.cwd();
-  const projectName = basename(cwd);
+  const projectName = name || basename(cwd);
   
   console.log(`🚀 Bootstrapping project "${projectName}" on ${server}...\n`);
   

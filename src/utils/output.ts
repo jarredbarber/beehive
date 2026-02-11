@@ -48,7 +48,7 @@ export function formatTask(task: Task): string {
     lines.push(`Description: ${descriptionBody}`);
   }
 
-  if (task.dependencies.length > 0) {
+  if (task.dependencies && task.dependencies.length > 0) {
     lines.push(`Dependencies: ${task.dependencies.join(', ')}`);
   }
 

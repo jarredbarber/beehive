@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import { existsSync } from 'fs';
 import { resolve, join } from 'path';
 import { registerClaimCommand } from './commands/claim.js';
+import { registerCreateCommand } from './commands/create.js';
 import { registerListCommand } from './commands/list.js';
 import { registerShowCommand } from './commands/show.js';
 import { registerNextCommand } from './commands/next.js';
@@ -85,6 +86,7 @@ if (root !== process.cwd()) {
 
 // Register all commands
 registerInitCommand(program);
+registerCreateCommand(program);
 registerClaimCommand(program);
 registerListCommand(program);
 registerShowCommand(program);
