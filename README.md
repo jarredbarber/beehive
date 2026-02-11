@@ -4,24 +4,23 @@ Distributed task coordination server for AI agents. Bees anywhere can claim task
 
 ## Architecture
 
-```
-┌──────────┐  ┌──────────┐  ┌──────────┐
-│  Bee A    │  │  Bee B    │  │  Bee C    │
-│ (home PC) │  │ (CI)      │  │ (colab)   │
-└─────┬─────┘  └─────┬─────┘  └─────┬─────┘
-      │ HTTPS         │ HTTPS        │ HTTPS
-      └───────┬───────┴──────────────┘
-              │
-    ┌─────────┴──────────┐
-    │  hive (Worker)      │
-    │  Cloudflare D1      │
-    └─────────────────────┘
-              │
-        GitHub webhooks
-              │
-    ┌─────────┴──────────┐
-    │  GitHub repo        │
-    └─────────────────────┘
+```mermaid
+graph TB
+    BeeA[Bee A<br/>home PC]
+    BeeB[Bee B<br/>CI]
+    BeeC[Bee C<br/>colab]
+    
+    Hive[hive Worker<br/>Cloudflare D1]
+    GitHub[GitHub repo]
+    
+    BeeA -->|HTTPS| Hive
+    BeeB -->|HTTPS| Hive
+    BeeC -->|HTTPS| Hive
+    
+    Hive -->|webhooks| GitHub
+    
+    style Hive fill:#e1f5ff
+    style GitHub fill:#f0f0f0
 ```
 
 Tasks flow: `open` → `in_progress` → `pending_review` → `closed`

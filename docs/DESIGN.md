@@ -8,27 +8,28 @@ GitHub handles code (branches, PRs). The hive handles tasks. The PR is the trust
 
 ## Architecture
 
-```
-┌──────────┐  ┌──────────┐  ┌──────────┐
-│  Bee A    │  │  Bee B    │  │  Bee C    │
-│ (home PC) │  │ (CI)      │  │ (colab)   │
-└─────┬─────┘  └─────┬─────┘  └─────┬─────┘
-      │ HTTPS         │ HTTPS        │ HTTPS
-      └───────┬───────┴──────────────┘
-              │
-    ┌─────────┴──────────┐
-    │  hive               │
-    │  (Cloudflare Worker) │
-    ├─────────────────────┤
-    │  D1 (SQLite)        │  ← tasks, submissions, state
-    │                     │
-    └─────────────────────┘
-              │
-        GitHub webhooks
-              │
-    ┌─────────┴──────────┐
-    │  GitHub repo(s)     │  ← code only (branches, PRs)
-    └─────────────────────┘
+```mermaid
+graph TB
+    BeeA[Bee A<br/>home PC]
+    BeeB[Bee B<br/>CI]
+    BeeC[Bee C<br/>colab]
+    
+    subgraph Hive[" "]
+        Server[hive<br/>Cloudflare Worker]
+        DB[(D1 SQLite<br/>tasks, submissions, state)]
+        Server --- DB
+    end
+    
+    GitHub[GitHub repo<br/>code only: branches, PRs]
+    
+    BeeA -->|HTTPS| Server
+    BeeB -->|HTTPS| Server
+    BeeC -->|HTTPS| Server
+    
+    Server -->|webhooks| GitHub
+    
+    style Hive fill:#e1f5ff
+    style GitHub fill:#f0f0f0
 ```
 
 ### Separation of Concerns
@@ -65,14 +66,18 @@ Determined by role. Most roles (formalize, explore, code, etc.) produce code →
 
 ### State Machine
 
-```
-open ──→ in_progress ──→ pending_review ──→ closed
-  ▲           │               │
-  │           │               │ (reject)
-  │           ▼               │
-  │       failed / blocked    │
-  │                           │
-  └───────────────────────────┘  (→ open, bee retries)
+```mermaid
+stateDiagram-v2
+    [*] --> open
+    open --> in_progress: claim
+    in_progress --> pending_review: submit
+    pending_review --> closed: approve (PR merged)
+    pending_review --> open: reject
+    in_progress --> failed: error
+    in_progress --> blocked: blocked
+    failed --> open: reopen
+    blocked --> open: unblock
+    closed --> [*]
 ```
 
 States: `open`, `in_progress`, `pending_review`, `closed`, `failed`, `blocked`. No `rejected` state — rejection returns to `open`.
