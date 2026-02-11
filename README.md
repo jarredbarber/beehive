@@ -54,8 +54,15 @@ Save the admin key — it can't be retrieved later.
 ### Setup
 
 ```bash
+# Option 1: Use .env file (recommended)
+cat > .env << EOF
+BH_SERVER=https://hive.example.com
+BH_KEY=bh_ak_...
+EOF
+
+# Option 2: Export manually
 export BH_SERVER=https://hive.example.com
-export BH_KEY=bh_ak_...    # Your admin or bee key
+export BH_KEY=bh_ak_...
 export BH_PROJECT=myproject  # Optional: defaults to directory name
 ```
 

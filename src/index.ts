@@ -1,8 +1,18 @@
 #!/usr/bin/env node
 
-import { Command } from 'commander';
+// Load .env file if it exists
+import { config } from 'dotenv';
 import { existsSync } from 'fs';
-import { resolve, join } from 'path';
+import { join } from 'path';
+
+// Try to load .env from current directory first
+const localEnv = join(process.cwd(), '.env');
+if (existsSync(localEnv)) {
+  config({ path: localEnv });
+}
+
+import { Command } from 'commander';
+import { resolve } from 'path';
 import { registerClaimCommand } from './commands/claim.js';
 import { registerCreateCommand } from './commands/create.js';
 import { registerListCommand } from './commands/list.js';
