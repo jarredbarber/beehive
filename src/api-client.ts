@@ -164,6 +164,14 @@ export class BeehiveApiClient {
     }
   }
 
+  async uploadLog(project: string, id: string, content: string, attempt?: number): Promise<{ success: boolean; attempt: number }> {
+    return this.request<{ success: boolean; attempt: number }>('POST', `/tasks/${id}/log`, {
+      project,
+      content,
+      attempt
+    });
+  }
+
   async claimNextTask(project: string, criteria: { bee?: string; roles?: string[]; models?: string[] }): Promise<{ task: Task } | null> {
     return this.request<{ task: Task } | null>('POST', '/tasks/next', {
       project,

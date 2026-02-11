@@ -109,6 +109,7 @@ app.use('*', async (c, next) => {
     { method: 'POST', url: /^\/tasks\/[^\/]+\/submit$/ },
     { method: 'POST', url: /^\/tasks\/[^\/]+\/fail$/ },
     { method: 'POST', url: /^\/tasks\/[^\/]+\/block$/ },
+    { method: 'POST', url: /^\/tasks\/[^\/]+\/log$/ },
     { method: 'PATCH', url: /^\/tasks\/[^\/]+$/ },
     { method: 'GET', url: /^\/tasks\/[^\/]+\/log$/ },
     { method: 'PATCH', url: /^\/tasks\/[^\/]+\/status$/ },
@@ -274,6 +275,29 @@ app.get('/tasks', async (c) => {
 
   const { results } = await c.env.DB.prepare(query).bind(...params).all();
   return c.json(results.map(formatTask));
+});
+
+// POST /tasks/:id/log
+app.post('/tasks/:id/log', async (c) => {
+  const taskId = c.req.param('id');
+  const body = await c.req.json<any>();
+  const { content } = body;
+  let { attempt } = body;
+
+  if (!content) return c.json({ error: 'Log content is required' }, 400);
+
+  if (attempt === undefined) {
+    const lastAttempt = await c.env.DB.prepare(
+      'SELECT MAX(attempt) as maxAttempt FROM task_logs WHERE task_id = ?'
+    ).bind(taskId).first<{ maxAttempt: number }>();
+    attempt = (lastAttempt?.maxAttempt || 0) + 1;
+  }
+
+  await c.env.DB.prepare(
+    'INSERT INTO task_logs (task_id, attempt, content) VALUES (?, ?, ?)'
+  ).bind(taskId, attempt, content).run();
+
+  return c.json({ success: true, attempt });
 });
 
 // GET /tasks/:id

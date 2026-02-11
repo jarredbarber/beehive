@@ -381,6 +381,20 @@ server.post('/webhooks/github', async (request, reply) => {
   return reply.status(200).send({ message: 'Event ignored' });
 });
 
+// POST /tasks/:id/log
+server.post<{ Params: { id: string } }>('/tasks/:id/log', async (request, reply) => {
+  const { id } = request.params;
+  const body = request.body as any;
+  const { project, content, attempt } = body;
+
+  if (!project || !content) {
+    return reply.status(400).send({ error: 'Project and log content are required' });
+  }
+
+  const result = await store.uploadLog(project, id, content, attempt);
+  return result;
+});
+
 // Signature verification helper
 function verifyGitHubSignature(payload: string, signature: string): boolean {
   if (!signature) return false;

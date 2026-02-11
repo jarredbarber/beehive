@@ -84,6 +84,7 @@ export interface TaskStore {
   reopenTask(project: string, id: string): Promise<Task | 'not_found'>;
   updateTask(project: string, id: string, input: UpdateTaskInput): Promise<Task | 'not_found'>;
   getTaskLog(project: string, id: string): Promise<string[] | 'not_found'>;
+  uploadLog(project: string, id: string, content: string, attempt?: number): Promise<{ success: boolean; attempt: number }>;
   claimNextTask(project: string, criteria: { bee?: string; roles?: string[] }): Promise<Task | null>;
   
   // Project management (needed for POST /projects)

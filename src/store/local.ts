@@ -265,6 +265,24 @@ export class LocalTaskStore implements TaskStore {
     });
   }
 
+  async uploadLog(project: string, id: string, content: string, attempt?: number): Promise<{ success: boolean; attempt: number }> {
+    return this.withLock(async (data) => {
+      const task = data.tasks[id];
+      if (!task || task.project !== project) {
+          throw new Error('Task not found');
+      }
+
+      if (!data.logs[id]) {
+        data.logs[id] = [];
+      }
+
+      const logAttempt = attempt !== undefined ? attempt : data.logs[id].length + 1;
+      data.logs[id][logAttempt - 1] = content;
+
+      return { success: true, attempt: logAttempt };
+    });
+  }
+
   async claimNextTask(project: string, criteria: { bee?: string; roles?: string[] }): Promise<Task | null> {
     return this.withLock(async (data) => {
       const tasks = Object.values(data.tasks)
