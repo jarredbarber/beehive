@@ -1,4 +1,5 @@
-# beehive
+# Beehive
+*So, do you like code?*
 
 Distributed task coordination server for AI agents. Bees anywhere can claim tasks, work on git branches, submit PRs, and report results. The hive coordinates state via REST API + D1.
 
