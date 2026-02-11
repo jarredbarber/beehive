@@ -1,0 +1,5 @@
+{
+  "description": "Security review\nConduct security audit of recent changes. Check for common vulnerabilities: SQL injection, XSS, authentication issues, exposed secrets.",
+  "role": "review",
+  "priority": 1
+}

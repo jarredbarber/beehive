@@ -1,0 +1,416 @@
+import { Hono } from 'hono';
+
+type Bindings = {
+  DB: D1Database;
+};
+
+const app = new Hono<{ Bindings: Bindings }>();
+
+// Helper for SHA-256 hashing in Workers
+async function hashKey(key: string): Promise<string> {
+  const msgUint8 = new TextEncoder().encode(key);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  return hashHex;
+}
+
+// Auth Middleware
+app.use('*', async (c, next) => {
+  const path = c.req.path;
+  const method = c.req.method;
+
+  // Unauthenticated routes
+  if (method === 'POST' && path === '/projects') {
+    return await next();
+  }
+
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const key = authHeader.substring(7);
+  const keyHash = await hashKey(key);
+
+  const apiKey = await c.env.DB.prepare(
+    'SELECT * FROM api_keys WHERE key_hash = ?'
+  ).bind(keyHash).first<{ project: string; role: string }>();
+
+  if (!apiKey) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  // Update last_used_at
+  c.executionCtx.waitUntil(
+    c.env.DB.prepare('UPDATE api_keys SET last_used_at = datetime("now") WHERE key_hash = ?')
+      .bind(keyHash).run()
+  );
+
+  // Set context for handlers
+  c.set('apiKey', apiKey);
+
+  if (apiKey.role === 'admin') {
+    return await next();
+  }
+
+  // Bee permissions
+  const beeEndpoints = [
+    { method: 'GET', url: /^\/tasks$/ },
+    { method: 'POST', url: /^\/tasks\/next$/ },
+    { method: 'POST', url: /^\/tasks\/[^\/]+\/claim$/ },
+    { method: 'POST', url: /^\/tasks\/[^\/]+\/submit$/ },
+    { method: 'POST', url: /^\/tasks\/[^\/]+\/fail$/ },
+    { method: 'POST', url: /^\/tasks\/[^\/]+\/block$/ },
+    { method: 'GET', url: /^\/tasks\/[^\/]+\/log$/ },
+    { method: 'PATCH', url: /^\/tasks\/[^\/]+\/status$/ },
+    { method: 'GET', url: /^\/context\/[^\/]+$/ },
+  ];
+
+  const isAllowed = beeEndpoints.some(endpoint => {
+    if (endpoint.method !== method) return false;
+    return endpoint.url.test(path);
+  });
+
+  if (!isAllowed) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+
+  return await next();
+});
+
+// Helper to generate IDs (project-xxxx)
+function generateSuffix(): string {
+  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < 4; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+// Helper to generate a key
+function generateKey(role: 'admin' | 'bee'): string {
+  const prefix = role === 'admin' ? 'bh_ak_' : 'bh_bk_';
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  const randomPart = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  return `${prefix}${randomPart}`;
+}
+
+// POST /projects
+app.post('/projects', async (c) => {
+  const body = await c.req.json<{ name: string; repo?: string; config?: string }>();
+  if (!body.name) return c.json({ error: 'Project name is required' }, 400);
+
+  const adminKey = generateKey('admin');
+  const keyHash = await hashKey(adminKey);
+
+  try {
+    await c.env.DB.batch([
+      c.env.DB.prepare('INSERT INTO projects (name, repo, config) VALUES (?, ?, ?)')
+        .bind(body.name, body.repo || '', body.config || ''),
+      c.env.DB.prepare('INSERT INTO api_keys (key_hash, project, role, label) VALUES (?, ?, ?, ?)')
+        .bind(keyHash, body.name, 'admin', 'bootstrap')
+    ]);
+
+    return c.json({ 
+      project: { name: body.name, repo: body.repo || '' },
+      adminKey 
+    }, 201);
+  } catch (e: any) {
+    return c.json({ error: e.message }, 500);
+  }
+});
+
+// GET /tasks
+app.get('/tasks', async (c) => {
+  const project = c.req.query('project');
+  const state = c.req.query('state');
+  const role = c.req.query('role');
+
+  if (!project) return c.json({ error: 'Project is required' }, 400);
+
+  let query = 'SELECT * FROM tasks WHERE project = ?';
+  const params: any[] = [project];
+
+  if (state) {
+    query += ' AND state = ?';
+    params.push(state);
+  }
+  if (role) {
+    query += ' AND role = ?';
+    params.push(role);
+  }
+
+  const { results } = await c.env.DB.prepare(query).bind(...params).all();
+  return c.json(results);
+});
+
+// POST /tasks
+app.post('/tasks', async (c) => {
+  const body = await c.req.json<any>();
+  if (!body.project || !body.description) return c.json({ error: 'Project and description are required' }, 400);
+
+  const id = `${body.project}-${generateSuffix()}`;
+  
+  await c.env.DB.prepare(
+    'INSERT INTO tasks (id, project, description, role, priority, test_command, parent_task) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, body.project, body.description, body.role || null, body.priority || 2, body.testCommand || null, body.parentTask || null).run();
+
+  const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first();
+  return c.json(task, 201);
+});
+
+// POST /tasks/next
+app.post('/tasks/next', async (c) => {
+  const body = await c.req.json<any>();
+  if (!body.project) return c.json({ error: 'Project is required' }, 400);
+
+  // Simplified selection logic: priority then age
+  // In a real implementation we'd check dependencies too.
+  // For now, get open tasks.
+  const query = `
+    SELECT t.* FROM tasks t
+    LEFT JOIN task_dependencies td ON t.id = td.task_id
+    WHERE t.project = ? AND t.state = 'open'
+    GROUP BY t.id
+    HAVING COUNT(CASE WHEN (SELECT state FROM tasks WHERE id = td.depends_on) != 'closed' THEN 1 END) = 0
+    ORDER BY t.priority ASC, t.created_at ASC
+    LIMIT 1
+  `;
+
+  const taskCandidate = await c.env.DB.prepare(query).bind(body.project).first<any>();
+
+  if (!taskCandidate) return c.json(null, 204);
+
+  // Atomic claim
+  const result = await c.env.DB.prepare(
+    'UPDATE tasks SET state = "in_progress", claimed_by = ?, updated_at = datetime("now") WHERE id = ? AND state = "open" RETURNING *'
+  ).bind(body.bee || 'unknown', taskCandidate.id).first();
+
+  if (!result) return c.json(null, 204);
+
+  return c.json({ task: result });
+});
+
+// POST /tasks/:id/claim
+app.post('/tasks/:id/claim', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<any>();
+  
+  const result = await c.env.DB.prepare(
+    'UPDATE tasks SET state = "in_progress", claimed_by = ?, updated_at = datetime("now") WHERE id = ? AND state = "open" RETURNING *'
+  ).bind(body.bee || 'unknown', id).first();
+
+  if (!result) return c.json({ error: 'Task not found or already claimed' }, 409);
+  return c.json(result);
+});
+
+// POST /tasks/:id/submit
+app.post('/tasks/:id/submit', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<any>();
+
+  if (!body.pr_url || !body.summary) return c.json({ error: 'pr_url and summary are required' }, 400);
+
+  const reviewId = `${body.project}-rev-${generateSuffix()}`;
+
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE tasks SET state = "pending_review", updated_at = datetime("now") WHERE id = ?').bind(id),
+    c.env.DB.prepare('INSERT INTO submissions (task_id, pr_url, summary, details, follow_up_tasks, log) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(id, body.pr_url, body.summary, body.details || null, JSON.stringify(body.follow_up_tasks || []), body.log || null),
+    c.env.DB.prepare('INSERT INTO tasks (id, project, description, role, state, priority, pr_url, reviews_task) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(reviewId, body.project, `Review: submission for ${id}`, 'pr_review', 'open', 1, body.pr_url, id)
+  ]);
+
+  const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first();
+  return c.json(task);
+});
+
+// POST /tasks/:id/approve
+app.post('/tasks/:id/approve', async (c) => {
+  const id = c.req.param('id');
+  
+  const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first<any>();
+  if (!task) return c.json({ error: 'Task not found' }, 404);
+
+  const submission = await c.env.DB.prepare('SELECT * FROM submissions WHERE task_id = ?').bind(id).first<any>();
+  if (!submission) return c.json({ error: 'Submission not found' }, 404);
+
+  const statements = [
+    c.env.DB.prepare('UPDATE tasks SET state = "closed", summary = ?, details = ?, pr_url = ?, updated_at = datetime("now") WHERE id = ?')
+      .bind(submission.summary, submission.details, submission.pr_url, id),
+    c.env.DB.prepare('UPDATE tasks SET state = "closed", updated_at = datetime("now") WHERE reviews_task = ?').bind(id),
+    c.env.DB.prepare('DELETE FROM submissions WHERE task_id = ?').bind(id)
+  ];
+
+  const followUps = JSON.parse(submission.follow_up_tasks || '[]');
+  for (const fu of followUps) {
+    const fuId = `${task.project}-${generateSuffix()}`;
+    statements.push(
+      c.env.DB.prepare('INSERT INTO tasks (id, project, description, role, priority, parent_task) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(fuId, task.project, fu.description, fu.role, fu.priority || 2, id)
+    );
+
+    if (fu.dependencies && Array.isArray(fu.dependencies)) {
+      for (const depId of fu.dependencies) {
+        statements.push(
+          c.env.DB.prepare('INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)')
+            .bind(fuId, depId)
+        );
+      }
+    }
+  }
+
+  await c.env.DB.batch(statements);
+  const updatedTask = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first();
+  return c.json(updatedTask);
+});
+
+// POST /tasks/:id/reject
+app.post('/tasks/:id/reject', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<any>();
+
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE tasks SET state = "open", updated_at = datetime("now") WHERE id = ?').bind(id),
+    c.env.DB.prepare('UPDATE tasks SET state = "closed", summary = ?, updated_at = datetime("now") WHERE reviews_task = ?')
+      .bind(`Rejected: ${body.reason || 'No reason provided'}`, id),
+    c.env.DB.prepare('DELETE FROM submissions WHERE task_id = ?').bind(id)
+  ]);
+
+  const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first();
+  return c.json(task);
+});
+
+// POST /tasks/:id/fail
+app.post('/tasks/:id/fail', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<any>();
+
+  const result = await c.env.DB.prepare(
+    'UPDATE tasks SET state = "failed", summary = ?, details = ?, updated_at = datetime("now") WHERE id = ? RETURNING *'
+  ).bind(body.error || 'Failed', body.details || null, id).first();
+
+  return c.json(result);
+});
+
+// POST /tasks/:id/block
+app.post('/tasks/:id/block', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<any>();
+
+  const result = await c.env.DB.prepare(
+    'UPDATE tasks SET state = "blocked", status = ?, updated_at = datetime("now") WHERE id = ? RETURNING *'
+  ).bind(body.reason || 'Blocked', id).first();
+
+  return c.json(result);
+});
+
+// GET /tasks/:id/log
+app.get('/tasks/:id/log', async (c) => {
+  const id = c.req.param('id');
+  const { results } = await c.env.DB.prepare('SELECT * FROM task_logs WHERE task_id = ? ORDER BY attempt ASC').bind(id).all();
+  return c.json(results);
+});
+
+// PATCH /tasks/:id/status
+app.patch('/tasks/:id/status', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<any>();
+
+  const result = await c.env.DB.prepare(
+    'UPDATE tasks SET status = ?, updated_at = datetime("now") WHERE id = ? RETURNING *'
+  ).bind(body.status, id).first();
+
+  return c.json(result);
+});
+
+// GET /context/:role
+app.get('/context/:role', async (c) => {
+  const role = c.req.param('role');
+  return c.json({ role, prompt: `Placeholder system prompt for ${role}` });
+});
+
+// Key management (Admin only)
+app.post('/keys', async (c) => {
+  const body = await c.req.json<any>();
+  const key = generateKey(body.role);
+  const keyHash = await hashKey(key);
+
+  await c.env.DB.prepare(
+    'INSERT INTO api_keys (key_hash, project, role, label) VALUES (?, ?, ?, ?)'
+  ).bind(keyHash, body.project, body.role, body.label || null).run();
+
+  return c.json({ key });
+});
+
+app.get('/keys', async (c) => {
+  const project = c.req.query('project');
+  const { results } = await c.env.DB.prepare('SELECT * FROM api_keys WHERE project = ?').bind(project).all();
+  return c.json(results);
+});
+
+app.delete('/keys/:hash', async (c) => {
+  const hash = c.req.param('hash');
+  await c.env.DB.prepare('DELETE FROM api_keys WHERE key_hash = ?').bind(hash).run();
+  return c.json({ success: true });
+});
+
+// Bulk Operations (Admin only)
+app.get('/projects/:name/dump', async (c) => {
+  const name = c.req.param('name');
+  
+  const tasks = await c.env.DB.prepare('SELECT * FROM tasks WHERE project = ?').bind(name).all();
+  const dependencies = await c.env.DB.prepare('SELECT * FROM task_dependencies WHERE task_id IN (SELECT id FROM tasks WHERE project = ?)').bind(name).all();
+  const submissions = await c.env.DB.prepare('SELECT * FROM submissions WHERE task_id IN (SELECT id FROM tasks WHERE project = ?)').bind(name).all();
+
+  return c.json({
+    project: name,
+    tasks: tasks.results,
+    dependencies: dependencies.results,
+    submissions: submissions.results
+  });
+});
+
+app.post('/projects/:name/load', async (c) => {
+  const name = c.req.param('name');
+  const body = await c.req.json<any>();
+  const replace = c.req.query('replace') === 'true';
+
+  const statements: any[] = [];
+
+  if (replace) {
+    statements.push(c.env.DB.prepare('DELETE FROM task_dependencies WHERE task_id IN (SELECT id FROM tasks WHERE project = ?)').bind(name));
+    statements.push(c.env.DB.prepare('DELETE FROM submissions WHERE task_id IN (SELECT id FROM tasks WHERE project = ?)').bind(name));
+    statements.push(c.env.DB.prepare('DELETE FROM tasks WHERE project = ?').bind(name));
+  }
+
+  if (body.tasks) {
+    for (const task of body.tasks) {
+      statements.push(c.env.DB.prepare(
+        'INSERT INTO tasks (id, project, description, role, state, priority, created_at, updated_at, claimed_by, summary, details, status, pr_url, parent_task, reviews_task) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).bind(task.id, name, task.description, task.role, task.state, task.priority, task.created_at, task.updated_at, task.claimed_by, task.summary, task.details, task.status, task.pr_url, task.parent_task, task.reviews_task));
+    }
+  }
+
+  if (body.dependencies) {
+    for (const dep of body.dependencies) {
+      statements.push(c.env.DB.prepare('INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)').bind(dep.task_id, dep.depends_on));
+    }
+  }
+
+  if (body.submissions) {
+    for (const sub of body.submissions) {
+      statements.push(c.env.DB.prepare(
+        'INSERT INTO submissions (task_id, pr_url, summary, details, follow_up_tasks, log, submitted_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).bind(sub.task_id, sub.pr_url, sub.summary, sub.details, sub.follow_up_tasks, sub.log, sub.submitted_at));
+    }
+  }
+
+  await c.env.DB.batch(statements);
+  return c.json({ success: true });
+});
+
+export default app;

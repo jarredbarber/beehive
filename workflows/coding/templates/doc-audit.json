@@ -1,0 +1,5 @@
+{
+  "description": "Documentation audit\nReview project documentation for accuracy, completeness, and clarity. Update outdated sections and add missing documentation.",
+  "role": "docs",
+  "priority": 3
+}
