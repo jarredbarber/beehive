@@ -21,11 +21,11 @@ This document tracks the tasks required to implement the distributed Beehive arc
 - [x] CLI/Admin endpoints for key management
 
 ## Phase 4: Local Mode (`bh serve`)
-- [ ] Implement `bh serve` command in CLI
-    - [ ] Configuration for port, storage location, etc.
-- [ ] Update CLI commands to optionally talk to a server instead of local files
-    - [ ] `BH_SERVER` and `BH_KEY` environment variable support
-    - [ ] Refactor CLI commands to use an `ApiClient` when `BH_SERVER` is set
+- [x] Implement `bh serve` command in CLI
+    - [x] Configuration for port, storage location, etc.
+- [x] Update CLI commands to optionally talk to a server instead of local files
+    - [x] `BH_SERVER` and `BH_KEY` environment variable support
+    - [x] Refactor CLI commands to use an `ApiClient` when `BH_SERVER` is set
 
 ## Phase 5: Cloudflare Worker & D1
 - [x] Create `worker/` directory with `wrangler.toml`
@@ -39,9 +39,9 @@ This document tracks the tasks required to implement the distributed Beehive arc
     - [x] Signature verification
     - [x] Handle `pull_request.closed` (merged) event
     - [x] Auto-execute pending submissions on merge
-- [ ] Add `octokit` integration to server for:
-    - [ ] PR commenting on rejection
-    - [ ] Auto-merge on approval (optional/configurable)
+- [x] Add GitHub integration to server for:
+    - [x] PR auto-merge on approval (squash method)
+    - [x] PR commenting on rejection
 
 ## Phase 7: CLI Updates & Tooling
 - [x] Create `src/api-client.ts` for REST API communication
