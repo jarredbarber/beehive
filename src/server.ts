@@ -1,5 +1,6 @@
 import fastify from 'fastify';
 import { createHmac } from 'crypto';
+import { Octokit } from '@octokit/rest';
 import { LocalTaskStore } from './store/local.js';
 import { TaskState } from './types.js';
 import { hashKey } from './auth.js';
@@ -174,6 +175,29 @@ server.post<{ Params: { id: string } }>('/tasks/:id/approve', async (request, re
   if (!body.project) {
     return reply.status(400).send({ error: 'Project is required' });
   }
+
+  // Get the task first to check for prUrl
+  const task = await store.getTask(body.project, id);
+  if (!task) {
+    return reply.status(404).send({ error: 'Task not found' });
+  }
+
+  // If task has a PR, try to merge it first
+  if (task.prUrl && process.env.GITHUB_TOKEN) {
+    try {
+      await mergePullRequest(task.prUrl, process.env.GITHUB_TOKEN);
+      console.log(`✅ Merged PR: ${task.prUrl}`);
+    } catch (error: any) {
+      console.error(`❌ Failed to merge PR: ${error.message}`);
+      return reply.status(400).send({ 
+        error: 'PR merge failed', 
+        details: error.message,
+        hint: 'PR may have conflicts or failing checks. Resolve on GitHub first.'
+      });
+    }
+  }
+
+  // Now execute the submission
   const result = await store.approveTask(body.project, id);
   if (result === 'not_found') {
     return reply.status(404).send({ error: 'Task not found' });
@@ -188,6 +212,24 @@ server.post<{ Params: { id: string } }>('/tasks/:id/reject', async (request, rep
   if (!body.project || !body.reason) {
     return reply.status(400).send({ error: 'Project and reason are required' });
   }
+
+  // Get task to find PR
+  const task = await store.getTask(body.project, id);
+  if (!task) {
+    return reply.status(404).send({ error: 'Task not found' });
+  }
+
+  // Comment on PR if it exists
+  if (task.prUrl && process.env.GITHUB_TOKEN) {
+    try {
+      await commentOnPullRequest(task.prUrl, body.reason, process.env.GITHUB_TOKEN);
+      console.log(`💬 Commented on PR: ${task.prUrl}`);
+    } catch (error: any) {
+      console.warn(`⚠️  Failed to comment on PR: ${error.message}`);
+      // Don't fail rejection if comment fails
+    }
+  }
+
   const result = await store.rejectTask(body.project, id, body.reason);
   if (result === 'not_found') {
     return reply.status(404).send({ error: 'Task not found' });
@@ -227,11 +269,14 @@ server.get<{ Params: { id: string } }>('/tasks/:id/log', async (request, reply) 
   const { id } = request.params;
   const query = request.query as { project: string };
   if (!query.project) {
-    return reply.status(400).send({ error: 'Project is required' });
+    return reply.status(400).send({ error: 'Project query parameter is required' });
   }
-  const result = await store.getTaskLog(query.project, id);
-  if (result === 'not_found') return reply.status(404).send({ error: 'Task not found' });
-  return result;
+
+  const log = await store.getTaskLog(query.project, id);
+  if (log === 'not_found') {
+    return reply.status(404).send({ error: 'Task not found' });
+  }
+  return log;
 });
 
 // PATCH /tasks/:id/status
@@ -335,6 +380,46 @@ function verifyGitHubSignature(payload: string, signature: string): boolean {
   const digest = 'sha256=' + hmac.update(payload).digest('hex');
   
   return signature === digest;
+}
+
+// Helper function to merge PR
+async function mergePullRequest(prUrl: string, token: string): Promise<void> {
+  const octokit = new Octokit({ auth: token });
+  
+  // Parse PR URL: https://github.com/owner/repo/pull/123
+  const match = prUrl.match(/github\.com\/([^\/]+)\/([^\/]+)\/pull\/(\d+)/);
+  if (!match) {
+    throw new Error('Invalid PR URL format');
+  }
+  
+  const [, owner, repo, prNumber] = match;
+  
+  // Merge using squash method
+  await octokit.rest.pulls.merge({
+    owner,
+    repo,
+    pull_number: parseInt(prNumber, 10),
+    merge_method: 'squash'
+  });
+}
+
+// Helper to comment on PR
+async function commentOnPullRequest(prUrl: string, reason: string, token: string): Promise<void> {
+  const octokit = new Octokit({ auth: token });
+  
+  const match = prUrl.match(/github\.com\/([^\/]+)\/([^\/]+)\/pull\/(\d+)/);
+  if (!match) {
+    throw new Error('Invalid PR URL format');
+  }
+  
+  const [, owner, repo, prNumber] = match;
+  
+  await octokit.rest.issues.createComment({
+    owner,
+    repo,
+    issue_number: parseInt(prNumber, 10),
+    body: `❌ **Submission Rejected**\n\n**Reason:** ${reason}\n\n---\n\nPlease address the feedback and resubmit.`
+  });
 }
 
 const start = async () => {

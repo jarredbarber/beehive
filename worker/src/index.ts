@@ -1,10 +1,17 @@
 import { Hono } from 'hono';
+import { Octokit } from '@octokit/rest';
 
 type Bindings = {
   DB: D1Database;
+  GITHUB_WEBHOOK_SECRET: string;
+  GITHUB_TOKEN: string;
 };
 
-const app = new Hono<{ Bindings: Bindings }>();
+type Variables = {
+  apiKey: { project: string; role: string };
+};
+
+const app = new Hono<{ Bindings: Bindings; Variables: Variables }>();
 
 // Helper for SHA-256 hashing in Workers
 async function hashKey(key: string): Promise<string> {
@@ -15,13 +22,51 @@ async function hashKey(key: string): Promise<string> {
   return hashHex;
 }
 
+// Helper to merge PR
+async function mergePullRequest(prUrl: string, token: string): Promise<void> {
+  const octokit = new Octokit({ auth: token });
+  
+  const match = prUrl.match(/github\.com\/([^\/]+)\/([^\/]+)\/pull\/(\d+)/);
+  if (!match) {
+    throw new Error('Invalid PR URL format');
+  }
+  
+  const [, owner, repo, prNumber] = match;
+  
+  await octokit.rest.pulls.merge({
+    owner,
+    repo,
+    pull_number: parseInt(prNumber, 10),
+    merge_method: 'squash'
+  });
+}
+
+// Helper to comment on PR
+async function commentOnPullRequest(prUrl: string, reason: string, token: string): Promise<void> {
+  const octokit = new Octokit({ auth: token });
+  
+  const match = prUrl.match(/github\.com\/([^\/]+)\/([^\/]+)\/pull\/(\d+)/);
+  if (!match) {
+    throw new Error('Invalid PR URL format');
+  }
+  
+  const [, owner, repo, prNumber] = match;
+  
+  await octokit.rest.issues.createComment({
+    owner,
+    repo,
+    issue_number: parseInt(prNumber, 10),
+    body: `❌ **Submission Rejected**\n\n**Reason:** ${reason}\n\n---\n\nPlease address the feedback and resubmit.`
+  });
+}
+
 // Auth Middleware
 app.use('*', async (c, next) => {
   const path = c.req.path;
   const method = c.req.method;
 
   // Unauthenticated routes
-  if (method === 'POST' && path === '/projects') {
+  if (method === 'POST' && (path === '/projects' || path === '/webhooks/github')) {
     return await next();
   }
 
@@ -168,8 +213,6 @@ app.post('/tasks/next', async (c) => {
   if (!body.project) return c.json({ error: 'Project is required' }, 400);
 
   // Simplified selection logic: priority then age
-  // In a real implementation we'd check dependencies too.
-  // For now, get open tasks.
   const query = `
     SELECT t.* FROM tasks t
     LEFT JOIN task_dependencies td ON t.id = td.task_id
@@ -182,14 +225,14 @@ app.post('/tasks/next', async (c) => {
 
   const taskCandidate = await c.env.DB.prepare(query).bind(body.project).first<any>();
 
-  if (!taskCandidate) return c.json(null, 204);
+  if (!taskCandidate) return c.body(null, 204);
 
   // Atomic claim
   const result = await c.env.DB.prepare(
     'UPDATE tasks SET state = "in_progress", claimed_by = ?, updated_at = datetime("now") WHERE id = ? AND state = "open" RETURNING *'
   ).bind(body.bee || 'unknown', taskCandidate.id).first();
 
-  if (!result) return c.json(null, 204);
+  if (!result) return c.body(null, 204);
 
   return c.json({ task: result });
 });
@@ -231,12 +274,27 @@ app.post('/tasks/:id/submit', async (c) => {
 // POST /tasks/:id/approve
 app.post('/tasks/:id/approve', async (c) => {
   const id = c.req.param('id');
+  const body = await c.req.json<any>();
   
-  const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first<any>();
+  const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ? AND project = ?')
+    .bind(id, body.project).first<any>();
+  
   if (!task) return c.json({ error: 'Task not found' }, 404);
 
   const submission = await c.env.DB.prepare('SELECT * FROM submissions WHERE task_id = ?').bind(id).first<any>();
   if (!submission) return c.json({ error: 'Submission not found' }, 404);
+
+  // Try to merge PR if it exists
+  if (task.pr_url && c.env.GITHUB_TOKEN) {
+    try {
+      await mergePullRequest(task.pr_url, c.env.GITHUB_TOKEN);
+    } catch (error: any) {
+      return c.json({ 
+        error: 'PR merge failed', 
+        details: error.message 
+      }, 400);
+    }
+  }
 
   const statements = [
     c.env.DB.prepare('UPDATE tasks SET state = "closed", summary = ?, details = ?, pr_url = ?, updated_at = datetime("now") WHERE id = ?')
@@ -273,6 +331,23 @@ app.post('/tasks/:id/reject', async (c) => {
   const id = c.req.param('id');
   const body = await c.req.json<any>();
 
+  if (!body.project || !body.reason) return c.json({ error: 'Project and reason are required' }, 400);
+
+  const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ? AND project = ?')
+    .bind(id, body.project).first<any>();
+  
+  if (!task) return c.json({ error: 'Task not found' }, 404);
+
+  // Comment on PR if it exists
+  if (task.pr_url && c.env.GITHUB_TOKEN) {
+    try {
+      await commentOnPullRequest(task.pr_url, body.reason, c.env.GITHUB_TOKEN);
+    } catch (error: any) {
+      // Don't fail rejection if comment fails, but log it
+      console.warn(`Failed to comment on PR: ${error.message}`);
+    }
+  }
+
   await c.env.DB.batch([
     c.env.DB.prepare('UPDATE tasks SET state = "open", updated_at = datetime("now") WHERE id = ?').bind(id),
     c.env.DB.prepare('UPDATE tasks SET state = "closed", summary = ?, updated_at = datetime("now") WHERE reviews_task = ?')
@@ -280,8 +355,8 @@ app.post('/tasks/:id/reject', async (c) => {
     c.env.DB.prepare('DELETE FROM submissions WHERE task_id = ?').bind(id)
   ]);
 
-  const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first();
-  return c.json(task);
+  const updatedTask = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first();
+  return c.json(updatedTask);
 });
 
 // POST /tasks/:id/fail
@@ -311,8 +386,21 @@ app.post('/tasks/:id/block', async (c) => {
 // GET /tasks/:id/log
 app.get('/tasks/:id/log', async (c) => {
   const id = c.req.param('id');
-  const { results } = await c.env.DB.prepare('SELECT * FROM task_logs WHERE task_id = ? ORDER BY attempt ASC').bind(id).all();
-  return c.json(results);
+  const project = c.req.query('project');
+  
+  if (!project) return c.json({ error: 'Project is required' }, 400);
+
+  const { results } = await c.env.DB.prepare('SELECT content FROM task_logs WHERE task_id = ? ORDER BY attempt ASC').bind(id).all();
+  
+  if (results.length === 0) {
+    // Check if task exists
+    const task = await c.env.DB.prepare('SELECT id FROM tasks WHERE id = ? AND project = ?').bind(id, project).first();
+    if (!task) return c.json({ error: 'Task not found' }, 404);
+    return c.json([]);
+  }
+
+  const logLines = results.map((row: any) => row.content);
+  return c.json(logLines);
 });
 
 // PATCH /tasks/:id/status

@@ -140,6 +140,17 @@ export class BeehiveApiClient {
     });
   }
 
+  async getTaskLog(project: string, id: string): Promise<string[]> {
+    try {
+      return await this.request<string[]>('GET', `/tasks/${id}/log`, undefined, { project });
+    } catch (error) {
+      if (error instanceof BeehiveApiError && error.status === 404) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
   async claimNextTask(project: string, criteria: { bee?: string; roles?: string[]; models?: string[] }): Promise<{ task: Task } | null> {
     return this.request<{ task: Task } | null>('POST', '/tasks/next', {
       project,

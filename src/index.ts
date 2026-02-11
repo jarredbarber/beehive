@@ -15,6 +15,7 @@ import { registerDumpCommand } from './commands/dump.js';
 import { registerLoadCommand } from './commands/load.js';
 import { registerServeCommand } from './commands/serve.js';
 import { registerKeysCommand } from './commands/keys.js';
+import { registerLogsCommand } from './commands/logs.js';
 import { findProjectRoot } from './utils/project.js';
 
 const program = new Command();
@@ -95,5 +96,6 @@ registerDumpCommand(program);
 registerLoadCommand(program);
 registerServeCommand(program);
 registerKeysCommand(program);
+registerLogsCommand(program);
 
 program.parse();
