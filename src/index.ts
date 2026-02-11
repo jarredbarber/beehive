@@ -8,7 +8,8 @@ import { join } from 'path';
 // Try to load .env from current directory first
 const localEnv = join(process.cwd(), '.env');
 if (existsSync(localEnv)) {
-  config({ path: localEnv });
+  // @ts-ignore - quiet is supported in newer versions
+  config({ path: localEnv, quiet: true });
 }
 
 import { Command } from 'commander';

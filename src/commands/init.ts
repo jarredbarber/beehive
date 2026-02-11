@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { mkdir, writeFile, readFile, access } from 'fs/promises';
+import { mkdir, writeFile, readFile } from 'fs/promises';
 import { join, dirname, basename } from 'path';
 import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -12,7 +12,6 @@ export function registerInitCommand(program: Command) {
     .command('init [name]')
     .description('Initialize bh in current project')
     .option('--with-agents', 'Install agent configurations for bh worker (coding workflow)')
-    .option('--with-skill', 'Install beehive.skill.md for skill integration')
     .option('--server <url>', 'Beehive server URL (e.g., https://hive.example.com)')
     .option('--repo <repo>', 'GitHub repository (format: owner/repo-name)')
     .action(async (name, options) => {
@@ -24,11 +23,6 @@ export function registerInitCommand(program: Command) {
         }
 
         console.log('🚀 Initializing bh in current project (local mode)...\n');
-
-        // Install skill definition if requested
-        if (options.withSkill) {
-          await installSkill();
-        }
 
         // Install agents if requested
         if (options.withAgents) {
@@ -47,8 +41,6 @@ export function registerInitCommand(program: Command) {
           console.log('  export BH_SERVER=...');
           console.log('  bh next');
         }
-
-        console.log('\nSee: beehive.skill.md for full documentation\n');
       } catch (error) {
         console.error(`Error: ${(error as Error).message}`);
         process.exit(1);
@@ -99,25 +91,6 @@ async function bootstrapRemoteProject(server: string, name?: string, repo?: stri
   console.log('  bh dump > backup.json');
 }
 
-async function installSkill() {
-  try {
-    // Get the skill file from bh installation
-    const tmRoot = join(__dirname, '..', '..');
-    const skillSource = join(tmRoot, 'beehive.skill.md');
-    const skillDest = join(process.cwd(), 'beehive.skill.md');
-
-    // Check if source exists
-    await access(skillSource);
-
-    // Copy to current directory
-    const content = await readFile(skillSource, 'utf-8');
-    await writeFile(skillDest, content, 'utf-8');
-    console.log('✓ Installed beehive.skill.md');
-  } catch (error) {
-    console.log('⚠ Could not install skill file:', (error as Error).message);
-  }
-}
-
 async function installDefaultWorkflow() {
   try {
     const workflowName = 'coding';
@@ -132,8 +105,8 @@ async function installDefaultWorkflow() {
     }
 
     // Get workflow files from bh installation
-    const tmRoot = join(__dirname, '..', '..');
-    const tmWorkflowDir = join(tmRoot, 'workflows', workflowName);
+    const bhRoot = join(__dirname, '..', '..');
+    const bhWorkflowDir = join(bhRoot, 'workflows', workflowName);
 
     const agentFiles = [
       'code.md',
@@ -153,7 +126,7 @@ async function installDefaultWorkflow() {
 
     for (const file of agentFiles) {
       try {
-        const source = join(tmWorkflowDir, file);
+        const source = join(bhWorkflowDir, file);
         const dest = join(workflowDir, file);
 
         // Skip if already exists

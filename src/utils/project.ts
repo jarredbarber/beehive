@@ -1,24 +1,21 @@
 import { existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 
 /**
- * Finds the project root by searching upwards for a .bh directory.
- * Falls back to process.cwd() if not found.
+ * Find the project root by searching upwards for a .bh directory.
+ * If not found, returns the current directory.
  */
 export function findProjectRoot(startDir: string = process.cwd()): string {
-  let currentDir = startDir;
+  let currentDir = resolve(startDir);
+  const root = resolve('/');
 
-  while (true) {
-    const tmDir = join(currentDir, '.bh');
-    if (existsSync(tmDir)) {
+  while (currentDir !== root) {
+    const bhDir = join(currentDir, '.bh');
+    if (existsSync(bhDir)) {
       return currentDir;
     }
-
     const parentDir = dirname(currentDir);
-    if (parentDir === currentDir) {
-      // Reached the root of the filesystem
-      break;
-    }
+    if (parentDir === currentDir) break;
     currentDir = parentDir;
   }
 
@@ -26,8 +23,9 @@ export function findProjectRoot(startDir: string = process.cwd()): string {
 }
 
 /**
- * Gets the .bh directory path for the current project.
+ * Get the path to the .bh directory in the current project.
  */
-export function getTmDir(startDir: string = process.cwd()): string {
-  return join(findProjectRoot(startDir), '.bh');
+export function getBhDir(): string {
+  const root = findProjectRoot();
+  return join(root, '.bh');
 }

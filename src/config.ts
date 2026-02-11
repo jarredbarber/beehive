@@ -136,11 +136,11 @@ export class ConfigManager {
 
   resolveModel(modelSpec: string): string[] {
     const [alias, suffix] = modelSpec.split(':');
-    const projectModels = this.config.models?.[alias];
+    const projectAgents = this.config.models?.[alias];
     
     let baseModels: string[];
-    if (projectModels) {
-      baseModels = Array.isArray(projectModels) ? projectModels : [projectModels];
+    if (projectAgents) {
+      baseModels = Array.isArray(projectAgents) ? projectAgents : [projectAgents];
     } else {
       const defaultAliases = this.getDefaultAliases();
       baseModels = defaultAliases[alias] || [alias];

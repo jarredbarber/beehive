@@ -11,11 +11,11 @@ export function getDefaultPrefix(cwd: string = process.cwd()): string {
   const folderName = basename(cwd);
   // Sanitize: lowercase, replace non-alphanumeric with empty, limit length
   const sanitized = folderName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10);
-  return sanitized || 'tm';
+  return sanitized ||  'bh';
 }
 
 export function generateId(existingIds: Set<string>, prefix?: string): string {
-  const idPrefix = (prefix || 'tm') + '-';
+  const idPrefix = (prefix ||  'bh') + '-';
   
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     let suffix = '';
