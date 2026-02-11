@@ -172,10 +172,6 @@ app.patch('/tasks/:id', async (c) => {
     updates.push('role = ?');
     values.push(body.role);
   }
-  if (body.testCommand !== undefined) {
-    updates.push('test_command = ?');
-    values.push(body.testCommand);
-  }
 
   if (updates.length > 0) {
     updates.push('updated_at = datetime("now")');
@@ -227,7 +223,6 @@ function formatTask(task: any) {
     prUrl: task.pr_url,
     parentTask: task.parent_task,
     reviewsTask: task.reviews_task,
-    testCommand: task.test_command,
     // dependencies is handled separately as it comes from a different table
   };
 }
@@ -311,11 +306,11 @@ app.post('/tasks', async (c) => {
   const id = `${body.project}-${generateSuffix()}`;
   
   await c.env.DB.prepare(
-    'INSERT INTO tasks (id, project, description, role, priority, test_command, parent_task) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).bind(id, body.project, body.description, body.role || null, body.priority || 2, body.testCommand || null, body.parentTask || null).run();
+    'INSERT INTO tasks (id, project, description, role, priority, parent_task) VALUES (?, ?, ?, ?, ?, ?)'
+  ).bind(id, body.project, body.description, body.role || null, body.priority || 2, body.parentTask || null).run();
 
   const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first();
-  return c.json(task, 201);
+  return c.json(formatTask(task), 201);
 });
 
 // POST /tasks/next

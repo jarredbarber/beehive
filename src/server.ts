@@ -103,7 +103,6 @@ server.post('/tasks', async (request, reply) => {
     description: string; 
     role?: string; 
     priority: number; 
-    testCommand?: string; 
     dependencies?: string[]; 
     parentTask?: string;
   };

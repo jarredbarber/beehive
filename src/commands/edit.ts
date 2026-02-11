@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { BeehiveApiClient } from '../api-client.js';
 import { ConfigManager } from '../config.js';
 import { formatTask } from '../utils/output.js';
+import { resolveTaskId } from '../utils/resolve-id.js';
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -12,30 +13,32 @@ export function registerEditCommand(program: Command) {
   program
     .command('edit <task-id>')
     .description('Edit task in $EDITOR')
+    .addHelpText('after', '\nExamples:\n  bh edit erdos-728-ry86\n  bh edit ry86  (resolves to project prefix)')
     .action(async (taskId: string) => {
       try {
         const config = new ConfigManager();
         await config.loadConfig();
+        
+        const fullId = resolveTaskId(taskId);
         const project = process.env.BH_PROJECT || config.prefix || 'default';
 
         const client = new BeehiveApiClient();
         
         // Fetch task
-        const task = await client.getTask(project, taskId);
+        const task = await client.getTask(project, fullId);
         if (!task) {
-          console.error(`Error: Task not found: ${taskId}`);
+          console.error(`Error: Task not found: ${fullId}`);
           process.exit(1);
         }
         
         // Create temp file
-        const tmpFile = join(tmpdir(), `bh-edit-${taskId}.md`);
+        const tmpFile = join(tmpdir(), `bh-edit-${fullId}.md`);
         
         // Format as YAML frontmatter + Markdown
         const frontmatter = {
           role: task.role,
           priority: task.priority,
-          dependencies: task.dependencies || [],
-          testCommand: task.testCommand || ''
+          dependencies: task.dependencies || []
         };
         
         const header = `# Read-only: ${task.id} | State: ${task.state} | Created: ${task.createdAt}`;
@@ -88,20 +91,14 @@ export function registerEditCommand(program: Command) {
           updates.dependencies = newDeps;
         }
         
-        const newTest = editedFrontmatter.testCommand || '';
-        const oldTest = task.testCommand || '';
-        if (newTest !== oldTest) {
-          updates.testCommand = newTest;
-        }
-        
         // Apply updates if any
         if (Object.keys(updates).length === 0) {
           console.log('No changes detected.');
           return;
         }
         
-        const updatedTask = await client.updateTask(project, taskId, updates);
-        console.log(`✅ Task ${taskId} updated successfully.`);
+        const updatedTask = await client.updateTask(project, fullId, updates);
+        console.log(`✅ Task ${fullId} updated successfully.`);
         console.log(formatTask(updatedTask));
         
       } catch (err) {

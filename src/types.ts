@@ -22,7 +22,6 @@ export interface Task {
   claimedBy?: string;
   parentTask?: string;
   reviewsTask?: string;
-  testCommand?: string;
   sessionId?: string;
   createdAt: string;
   updatedAt: string;
@@ -58,7 +57,6 @@ export interface CreateTaskInput {
   description: string;
   role?: string;
   priority: number;
-  testCommand?: string;
   dependencies?: string[];
   parentTask?: string;
 }
@@ -69,7 +67,6 @@ export interface UpdateTaskInput {
   priority?: number;
   state?: TaskState;
   status?: string;
-  testCommand?: string;
   sessionId?: string;
   prUrl?: string;
   dependencies?: string[];

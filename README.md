@@ -122,6 +122,22 @@ bh load myproject < backup.json
 bh load myproject --replace < backup.json
 ```
 
+### Task ID Resolution
+
+All commands accept either full task IDs or just the suffix:
+
+```bash
+# Full ID
+bh show erdos-728-ry86
+
+# Just suffix (automatically prepends project prefix from .bh/config.yaml)
+bh show ry86
+
+# Both resolve to the same task
+```
+
+This works for all task-related commands: show, claim, release, update, edit, submit, approve, reject, logs.
+
 ## API Endpoints
 
 See `docs/DESIGN.md` for full REST API specification.

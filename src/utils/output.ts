@@ -60,10 +60,6 @@ export function formatTask(task: Task): string {
     lines.push(`Status: ${task.status}`);
   }
 
-  if (task.testCommand) {
-    lines.push(`Test Command: ${task.testCommand}`);
-  }
-
   if (task.details) {
     lines.push(`Details: ${task.details}`);
   }

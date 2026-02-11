@@ -1,23 +1,26 @@
 import { Command } from 'commander';
 import { BeehiveApiClient, BeehiveApiError } from '../api-client.js';
 import { ConfigManager } from '../config.js';
-import { formatJson, formatTask } from '../utils/output.js';
+import { formatJson } from '../utils/output.js';
+import { resolveTaskId } from '../utils/resolve-id.js';
 
 export function registerRejectCommand(program: Command) {
   program
-    .command('reject')
+    .command('reject <task-id>')
     .description('Reject a pending task submission (admin only)')
-    .argument('<id>', 'Task ID')
     .requiredOption('--reason <text>', 'Reason for rejection')
-    .action(async (id, options, command) => {
+    .addHelpText('after', '\nExamples:\n  bh reject erdos-728-ry86 --reason "..."\n  bh reject ry86 --reason "..."  (resolves to project prefix)')
+    .action(async (taskId, options, command) => {
       try {
         const isJson = command.optsWithGlobals().json;
-        const client = new BeehiveApiClient();
         const config = new ConfigManager();
         await config.loadConfig();
+        
+        const fullId = resolveTaskId(taskId);
         const project = process.env.BH_PROJECT || config.prefix || 'default';
 
-        const task = await client.rejectTask(project, id, options.reason);
+        const client = new BeehiveApiClient();
+        const task = await client.rejectTask(project, fullId, options.reason);
 
         if (isJson) {
           console.log(formatJson(task));

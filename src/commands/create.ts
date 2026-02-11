@@ -11,7 +11,6 @@ export function registerCreateCommand(program: Command) {
     .requiredOption('-d, --description <text>', 'Task description')
     .option('-r, --role <role>', 'Agent role')
     .option('--priority <number>', 'Task priority (0-4)', '2')
-    .option('--test <command>', 'Test command')
     .option('--deps <ids>', 'Comma-separated dependency IDs')
     .option('--parent <id>', 'Parent task ID')
     .action(async (options, command) => {
@@ -26,7 +25,6 @@ export function registerCreateCommand(program: Command) {
           description: options.description,
           role: options.role,
           priority: parseInt(options.priority, 10),
-          testCommand: options.test,
           dependencies: options.deps ? options.deps.split(',') : [],
           parentTask: options.parent
         });

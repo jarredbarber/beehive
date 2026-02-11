@@ -92,7 +92,6 @@ export class LocalTaskStore implements TaskStore {
         role: input.role,
         priority: input.priority,
         dependencies: input.dependencies || [],
-        testCommand: input.testCommand,
         parentTask: input.parentTask,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -249,7 +248,6 @@ export class LocalTaskStore implements TaskStore {
       if (input.priority !== undefined) task.priority = input.priority;
       if (input.state !== undefined) task.state = input.state;
       if (input.status !== undefined) task.status = input.status;
-      if (input.testCommand !== undefined) task.testCommand = input.testCommand;
       if (input.sessionId !== undefined) task.sessionId = input.sessionId;
       if (input.prUrl !== undefined) task.prUrl = input.prUrl;
       if (input.dependencies !== undefined) task.dependencies = input.dependencies;

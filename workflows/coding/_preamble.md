@@ -62,9 +62,6 @@ bh create -t "Title" -r code -p 2 --deps tm-abc,tm-def
 
 # With inherited dependencies (copies deps from parent task)
 bh create -t "Title" -r test -p 2 --inherit-deps tm-abc
-
-# With test validation
-bh create -t "Title" -r code -p 2 --test-command "npm test"
 ```
 
 ### Priority Guidelines

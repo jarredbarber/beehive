@@ -2,21 +2,24 @@ import { Command } from 'commander';
 import { BeehiveApiClient } from '../api-client.js';
 import { ConfigManager } from '../config.js';
 import { formatJson } from '../utils/output.js';
+import { resolveTaskId } from '../utils/resolve-id.js';
 
 export function registerLogsCommand(program: Command) {
   program
-    .command('logs')
+    .command('logs <task-id>')
     .description('View task execution logs')
-    .argument('<id>', 'Task ID')
-    .action(async (id, options, command) => {
+    .addHelpText('after', '\nExamples:\n  bh logs erdos-728-ry86\n  bh logs ry86  (resolves to project prefix)')
+    .action(async (taskId, options, command) => {
       try {
         const isJson = command.optsWithGlobals().json;
         const config = new ConfigManager();
         await config.loadConfig();
-        const project = config.prefix || 'default';
+        
+        const fullId = resolveTaskId(taskId);
+        const project = process.env.BH_PROJECT || config.prefix || 'default';
 
         const client = new BeehiveApiClient();
-        const logs = await client.getTaskLog(project, id);
+        const logs = await client.getTaskLog(project, fullId);
 
         if (logs.length === 0) {
           console.log('No logs found for this task');

@@ -21,8 +21,7 @@ CREATE TABLE tasks (
   status TEXT,                 -- progress text
   pr_url TEXT,
   parent_task TEXT,            -- task that spawned this (null for manual/root tasks)
-  reviews_task TEXT,           -- pr_review tasks: which work task
-  test_command TEXT             -- validation command
+  reviews_task TEXT            -- pr_review tasks: which work task
 );
 
 CREATE TABLE submissions (

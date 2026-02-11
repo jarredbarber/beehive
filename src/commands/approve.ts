@@ -1,22 +1,25 @@
 import { Command } from 'commander';
 import { BeehiveApiClient, BeehiveApiError } from '../api-client.js';
 import { ConfigManager } from '../config.js';
-import { formatJson, formatTask } from '../utils/output.js';
+import { formatJson } from '../utils/output.js';
+import { resolveTaskId } from '../utils/resolve-id.js';
 
 export function registerApproveCommand(program: Command) {
   program
-    .command('approve')
+    .command('approve <task-id>')
     .description('Approve a pending task submission (admin only)')
-    .argument('<id>', 'Task ID')
-    .action(async (id, options, command) => {
+    .addHelpText('after', '\nExamples:\n  bh approve erdos-728-ry86\n  bh approve ry86  (resolves to project prefix)')
+    .action(async (taskId, options, command) => {
       try {
         const isJson = command.optsWithGlobals().json;
-        const client = new BeehiveApiClient();
         const config = new ConfigManager();
         await config.loadConfig();
+        
+        const fullId = resolveTaskId(taskId);
         const project = process.env.BH_PROJECT || config.prefix || 'default';
 
-        const task = await client.approveTask(project, id);
+        const client = new BeehiveApiClient();
+        const task = await client.approveTask(project, fullId);
 
         if (isJson) {
           console.log(formatJson(task));
