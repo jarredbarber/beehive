@@ -103,10 +103,13 @@ app.use('*', async (c, next) => {
   const beeEndpoints = [
     { method: 'GET', url: /^\/tasks$/ },
     { method: 'POST', url: /^\/tasks\/next$/ },
+    { method: 'GET', url: /^\/tasks\/[^\/]+$/ },
     { method: 'POST', url: /^\/tasks\/[^\/]+\/claim$/ },
+    { method: 'POST', url: /^\/tasks\/[^\/]+\/release$/ },
     { method: 'POST', url: /^\/tasks\/[^\/]+\/submit$/ },
     { method: 'POST', url: /^\/tasks\/[^\/]+\/fail$/ },
     { method: 'POST', url: /^\/tasks\/[^\/]+\/block$/ },
+    { method: 'PATCH', url: /^\/tasks\/[^\/]+$/ },
     { method: 'GET', url: /^\/tasks\/[^\/]+\/log$/ },
     { method: 'PATCH', url: /^\/tasks\/[^\/]+\/status$/ },
     { method: 'GET', url: /^\/context\/[^\/]+$/ },
@@ -122,6 +125,76 @@ app.use('*', async (c, next) => {
   }
 
   return await next();
+});
+
+// POST /tasks/:id/release
+app.post('/tasks/:id/release', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<any>();
+  const project = body.project;
+
+  if (!project) return c.json({ error: 'Project is required' }, 400);
+
+  const result = await c.env.DB.prepare(
+    'UPDATE tasks SET state = "open", claimed_by = NULL, updated_at = datetime("now") WHERE id = ? AND project = ? AND state = "in_progress" RETURNING *'
+  ).bind(id, project).first();
+
+  if (!result) return c.json({ error: 'Task not found or not in progress' }, 404);
+  return c.json(formatTask(result));
+});
+
+// PATCH /tasks/:id
+app.patch('/tasks/:id', async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json<any>();
+  const project = body.project;
+
+  if (!project) return c.json({ error: 'Project is required' }, 400);
+
+  const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ? AND project = ?')
+    .bind(id, project).first<any>();
+  
+  if (!task) return c.json({ error: 'Task not found' }, 404);
+
+  const updates: string[] = [];
+  const values: any[] = [];
+  const statements: any[] = [];
+
+  if (body.description !== undefined) {
+    updates.push('description = ?');
+    values.push(body.description);
+  }
+  if (body.priority !== undefined) {
+    updates.push('priority = ?');
+    values.push(body.priority);
+  }
+  if (body.role !== undefined) {
+    updates.push('role = ?');
+    values.push(body.role);
+  }
+  if (body.testCommand !== undefined) {
+    updates.push('test_command = ?');
+    values.push(body.testCommand);
+  }
+
+  if (updates.length > 0) {
+    updates.push('updated_at = datetime("now")');
+    const query = `UPDATE tasks SET ${updates.join(', ')} WHERE id = ? AND project = ?`;
+    statements.push(c.env.DB.prepare(query).bind(...values, id, project));
+  }
+
+  if (body.dependencies !== undefined && Array.isArray(body.dependencies)) {
+    statements.push(c.env.DB.prepare('DELETE FROM task_dependencies WHERE task_id = ?').bind(id));
+    for (const depId of body.dependencies) {
+      statements.push(c.env.DB.prepare('INSERT INTO task_dependencies (task_id, depends_on) VALUES (?, ?)').bind(id, depId));
+    }
+  }
+
+  if (statements.length === 0) return c.json({ error: 'No fields to update' }, 400);
+
+  await c.env.DB.batch(statements);
+  const updated = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first();
+  return c.json(formatTask(updated));
 });
 
 // Helper to generate IDs (project-xxxx)
@@ -206,6 +279,28 @@ app.get('/tasks', async (c) => {
 
   const { results } = await c.env.DB.prepare(query).bind(...params).all();
   return c.json(results.map(formatTask));
+});
+
+// GET /tasks/:id
+app.get('/tasks/:id', async (c) => {
+  const id = c.req.param('id');
+  const project = c.req.query('project');
+
+  if (!project) return c.json({ error: 'Project is required' }, 400);
+
+  const task = await c.env.DB.prepare('SELECT * FROM tasks WHERE id = ? AND project = ?')
+    .bind(id, project).first<any>();
+  
+  if (!task) return c.json({ error: 'Task not found' }, 404);
+
+  // Get dependencies
+  const { results: deps } = await c.env.DB.prepare(
+    'SELECT depends_on FROM task_dependencies WHERE task_id = ?'
+  ).bind(id).all();
+  
+  const dependencies = deps.map((d: any) => d.depends_on);
+
+  return c.json(formatTask({ ...task, dependencies }));
 });
 
 // POST /tasks

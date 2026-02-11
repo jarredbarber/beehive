@@ -44,6 +44,7 @@ server.addHook('preHandler', async (request, reply) => {
     { method: 'POST', url: /^\/tasks\/[^\/]+\/submit$/ },
     { method: 'POST', url: /^\/tasks\/[^\/]+\/fail$/ },
     { method: 'POST', url: /^\/tasks\/[^\/]+\/block$/ },
+    { method: 'PATCH', url: /^\/tasks\/[^\/]+$/ },
     { method: 'GET', url: /^\/tasks\/[^\/]+\/log$/ },
     { method: 'PATCH', url: /^\/tasks\/[^\/]+\/status$/ },
     { method: 'GET', url: /^\/context\/[^\/]+$/ },
@@ -288,6 +289,21 @@ server.patch<{ Params: { id: string } }>('/tasks/:id/status', async (request, re
   }
   const result = await store.updateTask(body.project, id, { status: body.status });
   if (result === 'not_found') return reply.status(404).send({ error: 'Task not found' });
+  return result;
+});
+
+// PATCH /tasks/:id
+server.patch<{ Params: { id: string } }>('/tasks/:id', async (request, reply) => {
+  const { id } = request.params;
+  const body = request.body as any;
+  if (!body.project) {
+    return reply.status(400).send({ error: 'Project is required' });
+  }
+
+  const result = await store.updateTask(body.project, id, body);
+  if (result === 'not_found') {
+    return reply.status(404).send({ error: 'Task not found' });
+  }
   return result;
 });
 

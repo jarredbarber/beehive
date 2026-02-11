@@ -125,6 +125,11 @@ export function formatTask(task: Task): string {
   lines.push(`Created: ${task.createdAt}`);
   lines.push(`Updated: ${task.updatedAt}`);
 
+  if (task.rolePrompt) {
+    lines.push('\nRole Prompt:');
+    lines.push(task.rolePrompt);
+  }
+
   return lines.join('\n');
 }
 

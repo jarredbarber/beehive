@@ -252,6 +252,7 @@ export class LocalTaskStore implements TaskStore {
       if (input.testCommand !== undefined) task.testCommand = input.testCommand;
       if (input.sessionId !== undefined) task.sessionId = input.sessionId;
       if (input.prUrl !== undefined) task.prUrl = input.prUrl;
+      if (input.dependencies !== undefined) task.dependencies = input.dependencies;
       
       task.updatedAt = new Date().toISOString();
       return task;

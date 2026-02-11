@@ -73,6 +73,15 @@ export BH_PROJECT=myproject  # Optional: defaults to directory name
 # Claim next task
 bh next
 
+# Update task metadata
+bh update myproject-abc -p 0 --role code
+
+# Edit task interactively
+bh edit myproject-abc
+
+# Release a task back to the pool
+bh release myproject-abc
+
 # Work on branch, create PR
 git checkout -b task/myproject-abc
 # ... work ...

@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { BeehiveApiClient } from '../api-client.js';
 import { ConfigManager } from '../config.js';
 import { formatJson, formatTask } from '../utils/output.js';
+import { loadRolePrompt } from '../utils/workflow.js';
 
 export function registerNextCommand(program: Command) {
   program
@@ -29,6 +30,14 @@ export function registerNextCommand(program: Command) {
             console.log('No unblocked tasks available');
           }
           return;
+        }
+
+        // Load role prompt if available
+        if (task.role) {
+          const rolePrompt = loadRolePrompt(config.workflow, task.role);
+          if (rolePrompt) {
+            task.rolePrompt = rolePrompt;
+          }
         }
 
         if (isJson) {

@@ -140,6 +140,19 @@ export class BeehiveApiClient {
     });
   }
 
+  async updateTask(project: string, id: string, options: any): Promise<Task> {
+    return this.request<Task>('PATCH', `/tasks/${id}`, {
+      project,
+      ...options
+    });
+  }
+
+  async releaseTask(project: string, id: string): Promise<Task> {
+    return this.request<Task>('POST', `/tasks/${id}/release`, {
+      project
+    });
+  }
+
   async getTaskLog(project: string, id: string): Promise<string[]> {
     try {
       return await this.request<string[]>('GET', `/tasks/${id}/log`, undefined, { project });

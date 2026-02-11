@@ -26,6 +26,7 @@ export interface Task {
   sessionId?: string;
   createdAt: string;
   updatedAt: string;
+  rolePrompt?: string;
 }
 
 export interface Submission {
@@ -71,6 +72,7 @@ export interface UpdateTaskInput {
   testCommand?: string;
   sessionId?: string;
   prUrl?: string;
+  dependencies?: string[];
 }
 
 export interface TaskStore {

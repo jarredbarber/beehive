@@ -23,11 +23,14 @@ import { registerInitCommand } from './commands/init.js';
 import { registerSubmitCommand } from './commands/submit.js';
 import { registerApproveCommand } from './commands/approve.js';
 import { registerRejectCommand } from './commands/reject.js';
+import { registerUpdateCommand } from './commands/update.js';
+import { registerEditCommand } from './commands/edit.js';
 import { registerDumpCommand } from './commands/dump.js';
 import { registerLoadCommand } from './commands/load.js';
 import { registerServeCommand } from './commands/serve.js';
 import { registerKeysCommand } from './commands/keys.js';
 import { registerLogsCommand } from './commands/logs.js';
+import { registerReleaseCommand } from './commands/release.js';
 import { findProjectRoot } from './utils/project.js';
 
 const program = new Command();
@@ -105,10 +108,13 @@ registerNextCommand(program);
 registerSubmitCommand(program);
 registerApproveCommand(program);
 registerRejectCommand(program);
+registerUpdateCommand(program);
+registerEditCommand(program);
 registerDumpCommand(program);
 registerLoadCommand(program);
 registerServeCommand(program);
 registerKeysCommand(program);
 registerLogsCommand(program);
+registerReleaseCommand(program);
 
 program.parse();
