@@ -157,6 +157,323 @@ The reviewer bee:
 3. Calls `approve` or `reject` on the **original work task**
 4. Review task auto-closes
 
+## Worker Loop (Autonomous Execution)
+
+### Overview
+
+A worker loop automates the task execution cycle: claim task → execute with agent → submit PR → repeat. This enables autonomous distributed execution where multiple workers process the backlog in parallel.
+
+### Architecture
+
+```mermaid
+graph TB
+    Worker[Worker Loop]
+    Hive[Hive API]
+    Agent[Agent<br/>pi/claude/etc]
+    Git[Git + GitHub]
+    
+    Worker -->|1. bh next| Hive
+    Hive -->|task + role prompt| Worker
+    Worker -->|2. execute| Agent
+    Agent -->|code changes| Worker
+    Worker -->|3. commit + push| Git
+    Worker -->|4. create PR| Git
+    Worker -->|5. bh submit| Hive
+    Worker -->|repeat| Worker
+    
+    style Worker fill:#e1f5ff
+    style Agent fill:#fff4e1
+```
+
+### Core Loop
+
+```typescript
+async function workerLoop() {
+  while (true) {
+    // 1. Claim next task (auto-includes role prompt)
+    const task = await claimNextTask();
+    if (!task) {
+      await sleep(pollInterval);
+      continue;
+    }
+    
+    // 2. Setup logging
+    const logFile = `.bh/logs/worker-${task.id}.md`;
+    
+    // 3. Execute with agent
+    const result = await executeWithAgent(task, logFile);
+    
+    if (result.status === 'failed') {
+      // Log failure, continue to next task
+      continue;
+    }
+    
+    // 4. Commit changes
+    await gitCommit(task.id, result.summary);
+    
+    // 5. Push branch and create PR
+    const prUrl = await createPR(task.id, result.summary);
+    
+    // 6. Submit to hive
+    await submitTask(task.id, {
+      prUrl,
+      summary: result.summary,
+      details: result.details,
+      followUps: result.followUps,
+      logFile
+    });
+  }
+}
+```
+
+### Task Execution
+
+#### 1. Claim Task
+
+```bash
+bh next
+```
+
+Returns:
+- Task metadata (id, description, priority, role, dependencies)
+- **Role prompt** from `workflows/{workflow}/{role}.md`
+- Sets state to `in_progress`
+
+#### 2. Build Agent Context
+
+Combine:
+- **Preamble**: `workflows/{workflow}/_preamble.md` (project-wide context)
+- **Role prompt**: Agent-specific instructions
+- **Task description**: The specific work to do
+
+Example for math-research workflow, formalize role:
+
+```markdown
+[workflows/math-research/_preamble.md]
+Project: Erdős theorem formalization
+Context: We're formalizing binomial coefficient bounds...
+
+[workflows/math-research/formalize.md]
+You are a Lean 4 formalization expert...
+
+[task.description]
+Wire Lemma3Counting into exists_m_choose_dvd_uniform
+```
+
+#### 3. Execute Agent
+
+Use any agent system (pi SDK, Claude API, etc.):
+
+```typescript
+const agent = new PiCodingAgent({
+  model: task.role.model || 'medium',
+  systemPrompt: preamble + rolePrompt,
+  userMessage: task.description,
+  logStream: createWriteStream(logFile)
+});
+
+const result = await agent.execute();
+```
+
+Agent should output structured completion:
+
+```json
+{
+  "status": "completed",
+  "summary": "Wired Lemma3Counting into main theorem",
+  "details": "Added import, connected cascade bounds to existence proof",
+  "followUps": [
+    {
+      "title": "Prove sub-lemma A",
+      "role": "formalize",
+      "priority": 2
+    }
+  ]
+}
+```
+
+#### 4. Parse Response
+
+Extract the JSON completion block from agent output:
+
+```typescript
+function parseAgentResponse(output: string): AgentResult {
+  const match = output.match(/```json\n([\s\S]*?)\n```/);
+  if (!match) {
+    throw new Error('No JSON completion block found');
+  }
+  return JSON.parse(match[1]);
+}
+```
+
+Common failure: Agent completes work but doesn't output valid JSON. Handle gracefully:
+- Log the issue
+- Either retry with "output JSON completion block" instruction
+- Or parse freeform output for key info
+
+#### 5. Git Operations
+
+```bash
+# Commit changes
+git add -A
+git commit -m "${task.id}: ${result.summary}"
+
+# Push to feature branch
+git push -u origin task/${task.id}
+```
+
+#### 6. Create PR
+
+```bash
+gh pr create \
+  --title "${task.id}: ${result.summary}" \
+  --body "${result.details}\n\nCloses #${task.id}"
+```
+
+Or use GitHub API (Octokit).
+
+#### 7. Submit to Hive
+
+```bash
+bh submit ${task.id} \
+  --pr ${prUrl} \
+  --summary "${result.summary}" \
+  --details "${result.details}" \
+  --log .bh/logs/worker-${task.id}.md \
+  --follow-up "Task A:formalize:2,Task B:verify:1"
+```
+
+Task moves to `pending_review` state. Logs uploaded to hive.
+
+### Error Handling
+
+#### Agent Failures
+
+```typescript
+if (result.status === 'failed') {
+  // Don't submit, just log and continue
+  await appendFile(systemLog, `[${task.id}] Failed: ${result.error}\n`);
+  
+  // Optionally: release task back to pool
+  await releaseTask(task.id);
+  
+  continue;
+}
+```
+
+#### Parse Failures
+
+Common issue: Agent did the work but didn't output JSON.
+
+```typescript
+try {
+  result = parseAgentResponse(output);
+} catch (err) {
+  // Check if files changed (work was done)
+  const changes = await gitStatus();
+  
+  if (changes.length > 0) {
+    // Work done, just missing JSON. Submit with manual summary
+    result = {
+      status: 'completed',
+      summary: 'Completed (parse failed, check logs)',
+      details: 'Agent output was not valid JSON. Review logs for details.'
+    };
+  } else {
+    // No work done
+    throw err;
+  }
+}
+```
+
+#### Git Conflicts
+
+If PR can't be created (branch conflicts, etc.):
+
+```typescript
+try {
+  prUrl = await createPR(task.id, result.summary);
+} catch (err) {
+  // Log conflict, submit without PR for manual resolution
+  await submitTask(task.id, {
+    summary: result.summary,
+    details: `Conflicts: ${err.message}. Manual merge required.`
+  });
+}
+```
+
+### Polling vs Event-Driven
+
+**Polling** (tm approach):
+```typescript
+while (true) {
+  const task = await claimNextTask();
+  if (task) await processTask(task);
+  await sleep(5000); // 5s poll interval
+}
+```
+
+**Event-driven** (future):
+- Worker subscribes to hive events (WebSocket, SSE)
+- Hive pushes when new tasks become available
+- More efficient, lower latency
+
+### Distributed Coordination
+
+Multiple workers can run in parallel. The hive coordinates via atomic claim operations:
+
+```
+Worker A: bh next → claims task-x7f9
+Worker B: bh next → claims task-m3k1 (different task)
+Worker C: bh next → claims task-a1b2 (different task)
+```
+
+No locking needed — D1 handles concurrent claims via SQL atomicity.
+
+### Workflow Integration
+
+The worker automatically adapts to the project's workflow:
+
+```yaml
+# .bh/config.yaml
+prefix: erdos-728
+workflow: math-research
+```
+
+Worker loads prompts from `workflows/math-research/{role}.md` automatically when claiming tasks.
+
+### Implementation Notes
+
+**Not included in core beehive:**
+- Worker loop is project-specific (different projects may use different agent systems)
+- Can be implemented as:
+  - Standalone `bh worker` command (like tm)
+  - GitHub Actions workflow
+  - Cloudflare Durable Object
+  - Custom script using beehive API
+
+**Reference implementation:** See tm's `src/commands/worker.ts` for a complete pi SDK-based worker loop.
+
+### Security
+
+Workers need **bee keys**, not admin keys:
+- Can claim, submit, read tasks
+- Cannot approve/reject (that's admin-only)
+- Cannot modify other workers' claimed tasks
+
+Generate bee keys:
+
+```bash
+bh keys create --role bee
+```
+
+Store in worker's `.env`:
+
+```
+BH_SERVER=https://hive.jbarb.io
+BH_KEY=bh_bk_...
+```
+
 ## Two Interfaces
 
 | Interface | For | How |
