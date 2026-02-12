@@ -190,7 +190,7 @@ async function executeAgent(
     
     const child = spawn(command, args, {
       shell: true,
-      stdio: ['inherit', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe']
     });
 
     child.stdout.on('data', (data) => {
