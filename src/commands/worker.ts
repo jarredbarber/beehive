@@ -1,12 +1,22 @@
 import { Command } from 'commander';
-import { spawn } from 'child_process';
-import { writeFileSync, existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { appendFile, writeFile } from 'fs/promises';
 import { BeehiveApiClient } from '../api-client.js';
 import { ConfigManager } from '../config.js';
 import { parseAgentResponse, detectWorkCompleted } from '../utils/parse-agent-response.js';
 import { completeGitWorkflow, hasChanges } from '../utils/git-ops.js';
+import { getTitle } from '../utils/output.js';
+import { loadTmDocs } from '../utils/project-docs.js';
+
+let _piSdk: typeof import('@mariozechner/pi-coding-agent') | null = null;
+async function getPiSdk() {
+  if (!_piSdk) {
+    _piSdk = await import('@mariozechner/pi-coding-agent');
+  }
+  return _piSdk;
+}
 
 export function registerWorkerCommand(program: Command) {
   program
@@ -25,24 +35,21 @@ export function registerWorkerCommand(program: Command) {
       
       const interval = parseInt(options.interval, 10) * 1000;
 
+      const { AuthStorage, ModelRegistry } = await getPiSdk();
+      const authStorage = new AuthStorage();
+      const modelRegistry = new ModelRegistry(authStorage);
+
       console.log(`🐝 Worker started for project: ${project}`);
-      console.log(`🤖 Agent: ${options.agent}`);
+      console.log(`🤖 Agent: direct (Pi SDK)`);
       console.log(`⏱️  Interval: ${options.interval}s`);
-
-      // Initial model list to announce when claiming tasks
-      const modelsToAnnounce = options.model ? [options.model] : [];
-
-      if (modelsToAnnounce.length > 0) {
-        console.log(`🧠 Announced models: ${modelsToAnnounce.join(', ')}`);
-      }
 
       while (true) {
         try {
-          // 1. Claim next task with model capability preference
+          // 1. Claim next task with model capability preference if provided
           const resultClaim = await client.claimNextTask(project, {
             bee: `worker-${process.pid}`,
             roles: undefined,
-            models: modelsToAnnounce.length > 0 ? modelsToAnnounce : undefined
+            models: options.model ? [options.model] : undefined
           });
 
           if (!resultClaim) {
@@ -50,7 +57,6 @@ export function registerWorkerCommand(program: Command) {
               console.log('No tasks available. Exiting.');
               break;
             }
-            // Wait and retry
             await new Promise(resolve => setTimeout(resolve, interval));
             continue;
           }
@@ -60,7 +66,6 @@ export function registerWorkerCommand(program: Command) {
           console.log(`   ${task.description.split('\n')[0]}`);
 
           // 2. Use workflow context from server
-          console.log(`📚 Using workflow context from server...`);
           const context = {
             preamble: task.preamble,
             rolePrompt: task.rolePrompt,
@@ -74,147 +79,117 @@ export function registerWorkerCommand(program: Command) {
             continue;
           }
 
-          // Determine specific model for this task execution
-          // Priority: CLI flag > Server-provided model > default
-          const model = options.model || context.model;
+          // Load project documentation
+          const tmDocs = await loadTmDocs(config);
+          const systemPrompt = `${context.fullContext}\n\n---\n\n${tmDocs}`;
+          const userPrompt = `Task: ${task.description}`;
 
-          // 3. Prepare execution
+          // Determine model
+          const modelString = options.model || context.model || 'medium';
+          const [provider, modelId] = modelString.includes('/') 
+            ? modelString.split('/') 
+            : ['google-antigravity', modelString];
+          
+          let model = modelRegistry.find(provider, modelId);
+          if (!model && !modelString.includes('/')) {
+              model = modelRegistry.find('google-antigravity', modelId);
+          }
+
+          // 3. Prepare execution environment
           const logDir = join(process.cwd(), '.bh', 'logs');
           if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
           const logFile = join(logDir, `worker-${task.id}.md`);
+          
+          await writeFile(logFile, `# Task: ${getTitle(task.description)} (${task.id})\n\nStart Time: ${new Date().toISOString()}\n\n`);
 
-          const promptFile = join(tmpdir(), `bh-prompt-${task.id}.md`);
-          const fullPrompt = `${context.fullContext}\n\n## Task\n\n${task.description}`;
-          writeFileSync(promptFile, fullPrompt, 'utf-8');
+          // 4. Execute with Pi SDK
+          console.log(`🚀 Executing agent with model: ${modelString}...`);
+          
+          const { DefaultResourceLoader, SessionManager, createAgentSession, createCodingTools } = await getPiSdk();
+          const loader = new DefaultResourceLoader({
+            systemPromptOverride: () => systemPrompt,
+          });
+          await loader.reload();
 
-          // 4. Execute agent
-          console.log(`🚀 Executing agent...${model ? ` (Model: ${model})` : ''}`);
-          const agentOutput = await executeAgent(options.agent, promptFile, logFile, model);
+          const sessionManager = SessionManager.create(process.cwd());
+          const { session } = await createAgentSession({
+            model,
+            resourceLoader: loader,
+            tools: createCodingTools(process.cwd()),
+            sessionManager,
+            authStorage,
+            modelRegistry,
+          });
 
-          // 5. Parse agent response
+          let fullOutput = '';
+          session.subscribe((event) => {
+            if (event.type === 'message_update') {
+              if (event.assistantMessageEvent.type === 'text_delta') {
+                const delta = event.assistantMessageEvent.delta;
+                fullOutput += delta;
+                process.stdout.write(delta);
+                appendFile(logFile, delta).catch(() => {});
+              } else if (event.assistantMessageEvent.type === 'thinking_delta') {
+                const delta = event.assistantMessageEvent.delta;
+                process.stdout.write(`\x1b[90m${delta}\x1b[0m`);
+                appendFile(logFile, `> ${delta.replace(/\n/g, '\n> ')}`).catch(() => {});
+              }
+            }
+          });
+
+          await session.prompt(userPrompt);
+          console.log('\n\n📝 Agent execution complete.');
+
+          // 5. Parse result
           let result;
           try {
-            result = parseAgentResponse(agentOutput.stdout + '\n' + agentOutput.stderr);
+            result = parseAgentResponse(fullOutput);
           } catch (parseErr) {
-            // Parse failed - check if work was done anyway
-            const workDone = detectWorkCompleted(agentOutput.stdout + '\n' + agentOutput.stderr);
+            const workDone = detectWorkCompleted(fullOutput);
             const gitChanges = await hasChanges();
             
             if (workDone || gitChanges) {
-              console.warn(`⚠️  Agent completed work but output wasn't valid JSON`);
               result = {
                 status: 'completed' as const,
                 summary: 'Completed (parse failed, see logs)',
-                details: 'Agent output was not valid JSON. Check logs for details.'
+                details: 'Agent output was not valid JSON.'
               };
             } else {
-              console.error(`❌ Parse failed and no work detected: ${(parseErr as Error).message}`);
-              await client.failTask(project, task.id, (parseErr as Error).message);
-              await client.uploadLog(project, task.id, agentOutput.stdout + '\n' + agentOutput.stderr);
-              continue;
+              throw parseErr;
             }
           }
 
-          // 6. Handle result based on status
           if (result.status === 'failed') {
-            console.error(`❌ Agent reported failure: ${result.error}`);
             await client.failTask(project, task.id, result.error || 'Unknown error');
-            await client.uploadLog(project, task.id, agentOutput.stdout + '\n' + agentOutput.stderr);
             continue;
           }
 
-          if (result.status === 'blocked') {
-            console.warn(`⚠️  Agent blocked: ${result.details || 'No details'}`);
-            // For now, just log and continue. TODO: Add blocked state support
-            continue;
-          }
-
-          // 7. Git workflow: commit + push + create PR
+          // 6. Git workflow
           console.log(`📦 Completing git workflow...`);
-          let prUrl;
-          try {
-            prUrl = await completeGitWorkflow(task.id, result.summary, result.details);
-            console.log(`✅ PR created: ${prUrl}`);
-          } catch (gitErr) {
-            console.error(`❌ Git workflow failed: ${(gitErr as Error).message}`);
-            await client.failTask(project, task.id, `Git workflow failed: ${(gitErr as Error).message}`);
-            await client.uploadLog(project, task.id, agentOutput.stdout + '\n' + agentOutput.stderr);
-            continue;
-          }
+          const prUrl = await completeGitWorkflow(task.id, result.summary, result.details);
 
-          // 8. Submit to hive
+          // 7. Submit
           console.log(`📤 Submitting to hive...`);
-          try {
-            await client.submitTask(project, task.id, {
-              pr_url: prUrl,
-              summary: result.summary,
-              details: result.details,
-              follow_up_tasks: result.followUps?.map(fu => ({
-                description: fu.title,
-                role: fu.role,
-                priority: fu.priority
-              })),
-              log: agentOutput.stdout + '\n' + agentOutput.stderr
-            });
-            
-            console.log(`✅ Task ${task.id} submitted successfully!`);
-            if (result.followUps && result.followUps.length > 0) {
-              console.log(`📋 Created ${result.followUps.length} follow-up task(s)`);
-            }
-          } catch (submitErr) {
-            console.error(`❌ Submission failed: ${(submitErr as Error).message}`);
-          }
+          await client.submitTask(project, task.id, {
+            pr_url: prUrl,
+            summary: result.summary,
+            details: result.details,
+            follow_up_tasks: result.followUps?.map(fu => ({
+              description: fu.title,
+              role: fu.role,
+              priority: fu.priority
+            })),
+            log: fullOutput
+          });
+          
+          console.log(`✅ Task ${task.id} submitted successfully!`);
 
         } catch (err) {
-          console.error(`Error in worker loop: ${(err as Error).message}`);
+          console.error(`Error: ${(err as Error).message}`);
         }
 
         if (options.once) break;
         await new Promise(resolve => setTimeout(resolve, interval));
       }
     });
-}
-
-async function executeAgent(
-  command: string, 
-  promptFile: string, 
-  logFile: string,
-  model?: string
-): Promise<{ success: boolean; code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    
-    // Default pi command arguments
-    const args = command === 'pi' 
-      ? ['-p', `@${promptFile}`, '--no-session', ...(model ? ['--model', model] : [])] 
-      : [promptFile];
-    
-    const child = spawn(command, args, {
-      shell: true,
-      stdio: ['ignore', 'pipe', 'pipe']
-    });
-
-    child.stdout.on('data', (data) => {
-      const chunk = data.toString();
-      stdout += chunk;
-      process.stdout.write(chunk);
-    });
-
-    child.stderr.on('data', (data) => {
-      const chunk = data.toString();
-      stderr += chunk;
-      process.stderr.write(chunk);
-    });
-
-    child.on('close', (code) => {
-      writeFileSync(logFile, stdout + '\n' + stderr, 'utf-8');
-      resolve({
-        success: code === 0,
-        code,
-        stdout,
-        stderr
-      });
-    });
-  });
 }

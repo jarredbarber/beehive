@@ -182,14 +182,17 @@ server.post('/tasks/next', async (request, reply) => {
     if (workflowMatch) workflow = workflowMatch[1];
   }
 
-  const workflowData = await loadWorkflow(workflow, task.role || 'code');
+  const workflowData = await loadWorkflow(workflow, task.role || 'code').catch(err => {
+    console.warn(`Failed to load workflow ${workflow}/${task.role}: ${err.message}`);
+    return null;
+  });
 
   return { 
     task: {
       ...task,
-      rolePrompt: workflowData.content,
-      preamble: workflowData.preamble,
-      model: workflowData.model
+      rolePrompt: workflowData?.content,
+      preamble: workflowData?.preamble,
+      model: workflowData?.model
     } 
   };
 });

@@ -430,16 +430,22 @@ app.post('/tasks/next', async (c) => {
     } catch (e) {}
   }
 
-  const rolePrompt = await loadWorkflow(workflow, task.role || 'code');
+  try {
+    const rolePrompt = await loadWorkflow(workflow, task.role || 'code');
 
-  return c.json({ 
-    task: {
-      ...task,
-      rolePrompt: rolePrompt.content,
-      preamble: rolePrompt.preamble,
-      model: rolePrompt.model
-    } 
-  });
+    return c.json({ 
+      task: {
+        ...task,
+        rolePrompt: rolePrompt.content,
+        preamble: rolePrompt.preamble,
+        model: rolePrompt.model
+      } 
+    });
+  } catch (err) {
+    // If workflow loading fails, still return the task but without the prompt
+    console.warn(`Failed to load workflow ${workflow}/${task.role}: ${(err as Error).message}`);
+    return c.json({ task });
+  }
 });
 
 // POST /tasks/:id/claim

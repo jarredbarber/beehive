@@ -21,6 +21,7 @@
   "author": "Jarred Barber",
   "license": "MIT",
   "dependencies": {
+    "@mariozechner/pi-coding-agent": "^0.52.9",
     "@octokit/rest": "^22.0.1",
     "commander": "^12.1.0",
     "dotenv": "^17.2.4",
