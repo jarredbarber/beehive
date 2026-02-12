@@ -25,6 +25,7 @@
     "commander": "^12.1.0",
     "dotenv": "^17.2.4",
     "fastify": "^5.7.4",
+    "gray-matter": "^4.0.3",
     "js-yaml": "^4.1.1",
     "json5": "^2.2.3",
     "proper-lockfile": "^4.1.2"

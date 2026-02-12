@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 import { BeehiveApiClient } from '../api-client.js';
 import { ConfigManager } from '../config.js';
 import { parseAgentResponse, detectWorkCompleted } from '../utils/parse-agent-response.js';
-import { loadWorkflowContext } from '../utils/workflow.js';
+import { loadWorkflowContext, loadWorkflowModels } from '../utils/workflow.js';
 import { completeGitWorkflow, hasChanges } from '../utils/git-ops.js';
 
 export function registerWorkerCommand(program: Command) {
@@ -17,6 +17,7 @@ export function registerWorkerCommand(program: Command) {
     .option('--agent <command>', 'Agent command to execute', 'pi')
     .option('--interval <seconds>', 'Interval between task checks', '10')
     .option('--max-attempts <n>', 'Maximum retries per task', '3')
+    .option('--model <name>', 'Model to use (overrides workflow default)')
     .action(async (options) => {
       const config = new ConfigManager();
       await config.loadConfig();
@@ -29,12 +30,22 @@ export function registerWorkerCommand(program: Command) {
       console.log(`🤖 Agent: ${options.agent}`);
       console.log(`⏱️  Interval: ${options.interval}s`);
 
+      // Initial model list to announce when claiming tasks
+      const modelsToAnnounce = options.model 
+        ? [options.model] 
+        : loadWorkflowModels(config.workflow);
+
+      if (modelsToAnnounce.length > 0) {
+        console.log(`🧠 Announced models: ${modelsToAnnounce.join(', ')}`);
+      }
+
       while (true) {
         try {
-          // 1. Claim next task
+          // 1. Claim next task with model capability preference
           const resultClaim = await client.claimNextTask(project, {
             bee: `worker-${process.pid}`,
-            roles: undefined
+            roles: undefined,
+            models: modelsToAnnounce.length > 0 ? modelsToAnnounce : undefined
           });
 
           if (!resultClaim) {
@@ -61,6 +72,10 @@ export function registerWorkerCommand(program: Command) {
             continue;
           }
 
+          // Determine specific model for this task execution
+          // Priority: CLI flag > Agent-specific frontmatter > default from claim announce
+          const model = options.model || context.model || (modelsToAnnounce.length === 1 ? modelsToAnnounce[0] : undefined);
+
           // 3. Prepare execution
           const logDir = join(process.cwd(), '.bh', 'logs');
           if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
@@ -71,8 +86,8 @@ export function registerWorkerCommand(program: Command) {
           writeFileSync(promptFile, fullPrompt, 'utf-8');
 
           // 4. Execute agent
-          console.log(`🚀 Executing agent...`);
-          const agentOutput = await executeAgent(options.agent, promptFile, logFile);
+          console.log(`🚀 Executing agent...${model ? ` (Model: ${model})` : ''}`);
+          const agentOutput = await executeAgent(options.agent, promptFile, logFile, model);
 
           // 5. Parse agent response
           let result;
@@ -158,13 +173,20 @@ export function registerWorkerCommand(program: Command) {
     });
 }
 
-async function executeAgent(command: string, promptFile: string, logFile: string): Promise<{ success: boolean; code: number | null; stdout: string; stderr: string }> {
+async function executeAgent(
+  command: string, 
+  promptFile: string, 
+  logFile: string,
+  model?: string
+): Promise<{ success: boolean; code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     let stdout = '';
     let stderr = '';
     
     // Default pi command arguments
-    const args = command === 'pi' ? [promptFile] : [promptFile];
+    const args = command === 'pi' 
+      ? [promptFile, ...(model ? ['--model', model] : [])] 
+      : [promptFile];
     
     const child = spawn(command, args, {
       shell: true,
