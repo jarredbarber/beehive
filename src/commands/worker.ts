@@ -185,7 +185,7 @@ async function executeAgent(
     
     // Default pi command arguments
     const args = command === 'pi' 
-      ? [promptFile, ...(model ? ['--model', model] : [])] 
+      ? ['-p', `@${promptFile}`, '--no-session', ...(model ? ['--model', model] : [])] 
       : [promptFile];
     
     const child = spawn(command, args, {
