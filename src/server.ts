@@ -1,12 +1,53 @@
 import fastify from 'fastify';
 import { createHmac } from 'crypto';
+import { readFileSync, existsSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { Octokit } from '@octokit/rest';
+import matter from 'gray-matter';
 import { LocalTaskStore } from './store/local.js';
 import { TaskState } from './types.js';
 import { hashKey } from './auth.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 const server = fastify({ logger: true });
 const store = new LocalTaskStore();
+
+/**
+ * Load workflow prompts from the filesystem.
+ */
+async function loadWorkflow(workflow: string, role: string) {
+  const searchPaths = [
+    join(process.cwd(), '.bh', 'workflows', workflow),
+    join(process.cwd(), 'workflows', workflow),
+    join(__dirname, '..', 'workflows', workflow),
+  ];
+
+  let preamble = '';
+  let rolePrompt = '';
+  let model = 'medium';
+
+  for (const dir of searchPaths) {
+    const preamblePath = join(dir, '_preamble.md');
+    const rolePath = join(dir, `${role}.md`);
+
+    if (existsSync(rolePath)) {
+      const roleContent = readFileSync(rolePath, 'utf-8');
+      const parsed = matter(roleContent);
+      rolePrompt = parsed.content;
+      model = (parsed.data.model as string) || model;
+
+      if (existsSync(preamblePath)) {
+        preamble = readFileSync(preamblePath, 'utf-8');
+      }
+      break;
+    }
+  }
+
+  return { content: rolePrompt, preamble, model };
+}
 
 // Auth Middleware
 server.addHook('preHandler', async (request, reply) => {
@@ -48,6 +89,7 @@ server.addHook('preHandler', async (request, reply) => {
     { method: 'GET', url: /^\/tasks\/[^\/]+\/log$/ },
     { method: 'PATCH', url: /^\/tasks\/[^\/]+\/status$/ },
     { method: 'GET', url: /^\/context\/[^\/]+$/ },
+    { method: 'GET', url: /^\/workflows\/[^\/]+\/[^\/]+$/ },
   ];
 
   const url = request.url.split('?')[0];
@@ -131,7 +173,25 @@ server.post('/tasks/next', async (request, reply) => {
   if (!task) {
     return reply.status(204).send();
   }
-  return { task };
+
+  // Load workflow context
+  const projectConfig = await store.getProject(body.project);
+  let workflow = 'coding';
+  if (projectConfig?.config) {
+    const workflowMatch = projectConfig.config.match(/workflow:\s*['"]?([^'"\s]+)['"]?/);
+    if (workflowMatch) workflow = workflowMatch[1];
+  }
+
+  const workflowData = await loadWorkflow(workflow, task.role || 'code');
+
+  return { 
+    task: {
+      ...task,
+      rolePrompt: workflowData.content,
+      preamble: workflowData.preamble,
+      model: workflowData.model
+    } 
+  };
 });
 
 // POST /tasks/:id/claim
@@ -341,6 +401,17 @@ server.delete<{ Params: { hash: string } }>('/keys/:hash', async (request, reply
   }
   const success = await store.revokeKey(query.project, hash);
   return { success };
+});
+
+// GET /workflows/:workflow/:role
+server.get<{ Params: { workflow: string; role: string } }>('/workflows/:workflow/:role', async (request, reply) => {
+  const { workflow, role } = request.params;
+  try {
+    const workflowData = await loadWorkflow(workflow, role);
+    return workflowData;
+  } catch (err) {
+    return reply.status(404).send({ error: 'Workflow not found' });
+  }
 });
 
 // POST /webhooks/github

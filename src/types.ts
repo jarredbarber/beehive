@@ -26,6 +26,8 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   rolePrompt?: string;
+  preamble?: string;
+  model?: string;
 }
 
 export interface Submission {

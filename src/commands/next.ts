@@ -32,8 +32,11 @@ export function registerNextCommand(program: Command) {
           return;
         }
 
-        // Load full workflow context if available
-        if (task.role) {
+        // Use role prompt from server if available
+        if (task.rolePrompt) {
+          // Task already has rolePrompt from server
+        } else if (task.role) {
+          // Fallback to local loading for non-distributed workflows
           const context = loadWorkflowContext(config.workflow, task.role);
           if (context.fullContext) {
             task.rolePrompt = context.fullContext;

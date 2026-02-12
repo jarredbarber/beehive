@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { Octokit } from '@octokit/rest';
+import workflows from './workflows.json';
 
 type Bindings = {
   DB: D1Database;
@@ -60,6 +61,27 @@ async function commentOnPullRequest(prUrl: string, reason: string, token: string
   });
 }
 
+/**
+ * Load workflow prompts.
+ */
+async function loadWorkflow(workflow: string, role: string) {
+  const w = (workflows as any)[workflow];
+  if (!w) {
+    throw new Error(`Workflow ${workflow} not found`);
+  }
+
+  const r = w[role];
+  if (!r) {
+    throw new Error(`Role ${role} not found in workflow ${workflow}`);
+  }
+
+  return {
+    content: r.content,
+    preamble: w._preamble || '',
+    model: r.model || 'medium'
+  };
+}
+
 // Auth Middleware
 app.use('*', async (c, next) => {
   const path = c.req.path;
@@ -114,6 +136,7 @@ app.use('*', async (c, next) => {
     { method: 'GET', url: /^\/tasks\/[^\/]+\/log$/ },
     { method: 'PATCH', url: /^\/tasks\/[^\/]+\/status$/ },
     { method: 'GET', url: /^\/context\/[^\/]+$/ },
+    { method: 'GET', url: /^\/workflows\/[^\/]+\/[^\/]+$/ },
   ];
 
   const isAllowed = beeEndpoints.some(endpoint => {
@@ -319,7 +342,26 @@ app.get('/tasks/:id', async (c) => {
   
   const dependencies = deps.map((d: any) => d.depends_on);
 
-  return c.json(formatTask({ ...task, dependencies }));
+  const formattedTask = formatTask({ ...task, dependencies });
+
+  // Load workflow context
+  const projectResult = await c.env.DB.prepare('SELECT config FROM projects WHERE name = ?')
+    .bind(project).first<{ config: string }>();
+  
+  let workflow = 'coding';
+  if (projectResult?.config) {
+    const workflowMatch = projectResult.config.match(/workflow:\s*['"]?([^'"\s]+)['"]?/);
+    if (workflowMatch) workflow = workflowMatch[1];
+  }
+
+  try {
+    const workflowData = await loadWorkflow(workflow, formattedTask.role || 'code');
+    formattedTask.rolePrompt = workflowData.content;
+    formattedTask.preamble = workflowData.preamble;
+    formattedTask.model = workflowData.model;
+  } catch (e) {}
+
+  return c.json(formattedTask);
 });
 
 // POST /tasks
@@ -364,7 +406,32 @@ app.post('/tasks/next', async (c) => {
 
   if (!result) return c.body(null, 204);
 
-  return c.json({ task: result });
+  const task = formatTask(result);
+
+  // Load workflow context
+  const projectResult = await c.env.DB.prepare('SELECT config FROM projects WHERE name = ?')
+    .bind(body.project).first<{ config: string }>();
+  
+  // Default to coding if not specified
+  let workflow = 'coding';
+  if (projectResult?.config) {
+    try {
+      // Very basic parsing for config if it's yaml/json
+      const workflowMatch = projectResult.config.match(/workflow:\s*['"]?([^'"\s]+)['"]?/);
+      if (workflowMatch) workflow = workflowMatch[1];
+    } catch (e) {}
+  }
+
+  const rolePrompt = await loadWorkflow(workflow, task.role || 'code');
+
+  return c.json({ 
+    task: {
+      ...task,
+      rolePrompt: rolePrompt.content,
+      preamble: rolePrompt.preamble,
+      model: rolePrompt.model
+    } 
+  });
 });
 
 // POST /tasks/:id/claim
@@ -574,6 +641,19 @@ app.delete('/keys/:hash', async (c) => {
   const hash = c.req.param('hash');
   await c.env.DB.prepare('DELETE FROM api_keys WHERE key_hash = ?').bind(hash).run();
   return c.json({ success: true });
+});
+
+// GET /workflows/:workflow/:role
+app.get('/workflows/:workflow/:role', async (c) => {
+  const workflow = c.req.param('workflow');
+  const role = c.req.param('role');
+  
+  try {
+    const workflowData = await loadWorkflow(workflow, role);
+    return c.json(workflowData);
+  } catch (err) {
+    return c.json({ error: 'Workflow not found' }, 404);
+  }
 });
 
 // Bulk Operations (Admin only)

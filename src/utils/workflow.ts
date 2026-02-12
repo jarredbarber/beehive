@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import matter from 'gray-matter';
@@ -76,36 +76,4 @@ export function loadWorkflowContext(workflow: string, role: string): WorkflowCon
     fullContext: parts.join('\n\n---\n\n'),
     model
   };
-}
-
-/**
- * Load all models defined in a workflow.
- */
-export function loadWorkflowModels(workflow: string): string[] {
-  const searchPaths = [
-    join(process.cwd(), '.bh', 'workflows', workflow),
-    join(process.cwd(), 'workflows', workflow),
-    join(__dirname, '..', '..', 'workflows', workflow),
-  ];
-  
-  const models = new Set<string>();
-  
-  for (const dir of searchPaths) {
-    if (existsSync(dir)) {
-      try {
-        const files = readdirSync(dir);
-        for (const file of files) {
-          if (file.endsWith('.md') && !file.startsWith('_')) {
-            const content = readFileSync(join(dir, file), 'utf-8');
-            const parsed = matter(content);
-            if (parsed.data.model) {
-              models.add(parsed.data.model);
-            }
-          }
-        }
-      } catch (e) {}
-    }
-  }
-  
-  return Array.from(models);
 }

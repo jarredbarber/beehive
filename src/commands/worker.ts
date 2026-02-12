@@ -6,7 +6,6 @@ import { tmpdir } from 'os';
 import { BeehiveApiClient } from '../api-client.js';
 import { ConfigManager } from '../config.js';
 import { parseAgentResponse, detectWorkCompleted } from '../utils/parse-agent-response.js';
-import { loadWorkflowContext, loadWorkflowModels } from '../utils/workflow.js';
 import { completeGitWorkflow, hasChanges } from '../utils/git-ops.js';
 
 export function registerWorkerCommand(program: Command) {
@@ -31,9 +30,7 @@ export function registerWorkerCommand(program: Command) {
       console.log(`⏱️  Interval: ${options.interval}s`);
 
       // Initial model list to announce when claiming tasks
-      const modelsToAnnounce = options.model 
-        ? [options.model] 
-        : loadWorkflowModels(config.workflow);
+      const modelsToAnnounce = options.model ? [options.model] : [];
 
       if (modelsToAnnounce.length > 0) {
         console.log(`🧠 Announced models: ${modelsToAnnounce.join(', ')}`);
@@ -62,19 +59,24 @@ export function registerWorkerCommand(program: Command) {
           console.log(`\n📌 Claimed task: ${task.id} (${task.role})`);
           console.log(`   ${task.description.split('\n')[0]}`);
 
-          // 2. Load full workflow context (preamble + role prompt)
-          console.log(`📚 Loading workflow context...`);
-          const context = loadWorkflowContext(config.workflow, task.role || 'code');
+          // 2. Use workflow context from server
+          console.log(`📚 Using workflow context from server...`);
+          const context = {
+            preamble: task.preamble,
+            rolePrompt: task.rolePrompt,
+            fullContext: [task.preamble, task.rolePrompt].filter(Boolean).join('\n\n---\n\n'),
+            model: task.model
+          };
 
           if (!context.fullContext) {
-            console.error(`❌ No workflow context found for ${config.workflow}/${task.role}`);
-            await client.failTask(project, task.id, `Missing workflow files`);
+            console.error(`❌ No workflow context received from server for ${task.role}`);
+            await client.failTask(project, task.id, `Missing workflow context from server`);
             continue;
           }
 
           // Determine specific model for this task execution
-          // Priority: CLI flag > Agent-specific frontmatter > default from claim announce
-          const model = options.model || context.model || (modelsToAnnounce.length === 1 ? modelsToAnnounce[0] : undefined);
+          // Priority: CLI flag > Server-provided model > default
+          const model = options.model || context.model;
 
           // 3. Prepare execution
           const logDir = join(process.cwd(), '.bh', 'logs');
