@@ -196,6 +196,14 @@ app.patch('/tasks/:id', async (c) => {
     updates.push('role = ?');
     values.push(body.role);
   }
+  if (body.state !== undefined) {
+    updates.push('state = ?');
+    values.push(body.state);
+  }
+  if (body.claimedBy !== undefined) {
+    updates.push('claimed_by = ?');
+    values.push(body.claimedBy);
+  }
 
   if (updates.length > 0) {
     updates.push('updated_at = datetime("now")');
