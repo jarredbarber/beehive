@@ -1,12 +1,13 @@
 import { Command } from 'commander';
 import { spawn } from 'child_process';
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
+import { writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { BeehiveApiClient } from '../api-client.js';
 import { ConfigManager } from '../config.js';
-import { loadRolePrompt } from '../utils/workflow.js';
-import { Task, TaskState } from '../types.js';
+import { parseAgentResponse, detectWorkCompleted } from '../utils/parse-agent-response.js';
+import { loadWorkflowContext } from '../utils/workflow.js';
+import { completeGitWorkflow, hasChanges } from '../utils/git-ops.js';
 
 export function registerWorkerCommand(program: Command) {
   program
@@ -23,7 +24,6 @@ export function registerWorkerCommand(program: Command) {
       const client = new BeehiveApiClient();
       
       const interval = parseInt(options.interval, 10) * 1000;
-      const maxAttempts = parseInt(options.maxAttempts, 10);
 
       console.log(`🐝 Worker started for project: ${project}`);
       console.log(`🤖 Agent: ${options.agent}`);
@@ -32,12 +32,12 @@ export function registerWorkerCommand(program: Command) {
       while (true) {
         try {
           // 1. Claim next task
-          const result = await client.claimNextTask(project, {
+          const resultClaim = await client.claimNextTask(project, {
             bee: `worker-${process.pid}`,
             roles: undefined
           });
 
-          if (!result) {
+          if (!resultClaim) {
             if (options.once) {
               console.log('No tasks available. Exiting.');
               break;
@@ -47,65 +47,106 @@ export function registerWorkerCommand(program: Command) {
             continue;
           }
 
-          const task = result.task;
+          const task = resultClaim.task;
           console.log(`\n📌 Claimed task: ${task.id} (${task.role})`);
           console.log(`   ${task.description.split('\n')[0]}`);
 
-          // 2. Load role prompt
-          let rolePrompt = task.rolePrompt;
-          if (!rolePrompt && task.role) {
-            rolePrompt = loadRolePrompt(config.workflow, task.role);
+          // 2. Load full workflow context (preamble + role prompt)
+          console.log(`📚 Loading workflow context...`);
+          const context = loadWorkflowContext(config.workflow, task.role || 'code');
+
+          if (!context.fullContext) {
+            console.error(`❌ No workflow context found for ${config.workflow}/${task.role}`);
+            await client.failTask(project, task.id, `Missing workflow files`);
+            continue;
           }
 
           // 3. Prepare execution
           const logDir = join(process.cwd(), '.bh', 'logs');
           if (!existsSync(logDir)) mkdirSync(logDir, { recursive: true });
-          const logFile = join(logDir, `worker-${task.id}.log`);
-          
+          const logFile = join(logDir, `worker-${task.id}.md`);
+
           const promptFile = join(tmpdir(), `bh-prompt-${task.id}.md`);
-          const fullPrompt = `${rolePrompt || ''}\n\nTask: ${task.description}`;
+          const fullPrompt = `${context.fullContext}\n\n## Task\n\n${task.description}`;
           writeFileSync(promptFile, fullPrompt, 'utf-8');
 
           // 4. Execute agent
-          console.log(`🚀 Executing agent... (Logging to ${logFile})`);
+          console.log(`🚀 Executing agent...`);
           const agentOutput = await executeAgent(options.agent, promptFile, logFile);
-          
-          // 5. Submit or Fail
-          if (agentOutput.success) {
-            // Attempt to find PR URL in output
-            const prUrl = findPrUrl(agentOutput.stdout);
+
+          // 5. Parse agent response
+          let result;
+          try {
+            result = parseAgentResponse(agentOutput.stdout + '\n' + agentOutput.stderr);
+          } catch (parseErr) {
+            // Parse failed - check if work was done anyway
+            const workDone = detectWorkCompleted(agentOutput.stdout + '\n' + agentOutput.stderr);
+            const gitChanges = await hasChanges();
             
-            if (prUrl) {
-              console.log(`✅ Agent completed. PR found: ${prUrl}`);
-              await client.submitTask(project, task.id, {
-                pr_url: prUrl,
-                summary: 'Agent completed task',
-                log: agentOutput.stdout + '\n' + agentOutput.stderr
-              });
+            if (workDone || gitChanges) {
+              console.warn(`⚠️  Agent completed work but output wasn't valid JSON`);
+              result = {
+                status: 'completed' as const,
+                summary: 'Completed (parse failed, see logs)',
+                details: 'Agent output was not valid JSON. Check logs for details.'
+              };
             } else {
-              console.warn('⚠️  Agent completed but no PR URL found in output.');
-              // In a real scenario, we might want to check git branch or fail
-              // For now, let's look for an existing PR for the task branch
-              const branchPrUrl = await findPrUrlFromGit(task.id);
-              if (branchPrUrl) {
-                console.log(`✅ Found PR from git: ${branchPrUrl}`);
-                await client.submitTask(project, task.id, {
-                  pr_url: branchPrUrl,
-                  summary: 'Agent completed task',
-                  log: agentOutput.stdout + '\n' + agentOutput.stderr
-                });
-              } else {
-                console.error('❌ Failed to find PR URL. Marking task as failed.');
-                await client.failTask(project, task.id, 'No PR URL found after completion');
-              }
+              console.error(`❌ Parse failed and no work detected: ${(parseErr as Error).message}`);
+              await client.failTask(project, task.id, (parseErr as Error).message);
+              await client.uploadLog(project, task.id, agentOutput.stdout + '\n' + agentOutput.stderr);
+              continue;
             }
-          } else {
-            console.error(`❌ Agent failed with code ${agentOutput.code}`);
-            await client.failTask(project, task.id, `Agent failed with code ${agentOutput.code}`, agentOutput.stderr);
           }
 
-          // Upload full log
-          await client.uploadLog(project, task.id, agentOutput.stdout + '\n' + agentOutput.stderr);
+          // 6. Handle result based on status
+          if (result.status === 'failed') {
+            console.error(`❌ Agent reported failure: ${result.error}`);
+            await client.failTask(project, task.id, result.error || 'Unknown error');
+            await client.uploadLog(project, task.id, agentOutput.stdout + '\n' + agentOutput.stderr);
+            continue;
+          }
+
+          if (result.status === 'blocked') {
+            console.warn(`⚠️  Agent blocked: ${result.details || 'No details'}`);
+            // For now, just log and continue. TODO: Add blocked state support
+            continue;
+          }
+
+          // 7. Git workflow: commit + push + create PR
+          console.log(`📦 Completing git workflow...`);
+          let prUrl;
+          try {
+            prUrl = await completeGitWorkflow(task.id, result.summary, result.details);
+            console.log(`✅ PR created: ${prUrl}`);
+          } catch (gitErr) {
+            console.error(`❌ Git workflow failed: ${(gitErr as Error).message}`);
+            await client.failTask(project, task.id, `Git workflow failed: ${(gitErr as Error).message}`);
+            await client.uploadLog(project, task.id, agentOutput.stdout + '\n' + agentOutput.stderr);
+            continue;
+          }
+
+          // 8. Submit to hive
+          console.log(`📤 Submitting to hive...`);
+          try {
+            await client.submitTask(project, task.id, {
+              pr_url: prUrl,
+              summary: result.summary,
+              details: result.details,
+              follow_up_tasks: result.followUps?.map(fu => ({
+                description: fu.title,
+                role: fu.role,
+                priority: fu.priority
+              })),
+              log: agentOutput.stdout + '\n' + agentOutput.stderr
+            });
+            
+            console.log(`✅ Task ${task.id} submitted successfully!`);
+            if (result.followUps && result.followUps.length > 0) {
+              console.log(`📋 Created ${result.followUps.length} follow-up task(s)`);
+            }
+          } catch (submitErr) {
+            console.error(`❌ Submission failed: ${(submitErr as Error).message}`);
+          }
 
         } catch (err) {
           console.error(`Error in worker loop: ${(err as Error).message}`);
@@ -150,33 +191,6 @@ async function executeAgent(command: string, promptFile: string, logFile: string
         stdout,
         stderr
       });
-    });
-  });
-}
-
-function findPrUrl(output: string): string | null {
-  const prRegex = /https:\/\/github\.com\/[^\/\s]+\/[^\/\s]+\/pull\/\d+/;
-  const match = output.match(prRegex);
-  return match ? match[0] : null;
-}
-
-async function findPrUrlFromGit(taskId: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    // Try gh cli if available
-    const child = spawn('gh', ['pr', 'list', '--head', `task/${taskId}`, '--json', 'url', '--limit', '1'], {
-      shell: true
-    });
-    
-    let output = '';
-    child.stdout.on('data', (data) => output += data.toString());
-    
-    child.on('close', (code) => {
-      if (code !== 0) return resolve(null);
-      try {
-        const prs = JSON.parse(output);
-        if (prs.length > 0) return resolve(prs[0].url);
-      } catch (e) {}
-      resolve(null);
     });
   });
 }

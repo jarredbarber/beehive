@@ -8,7 +8,8 @@
   },
   "scripts": {
     "build": "tsc && chmod +x dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "test": "tsx --test src/**/*.test.ts"
   },
   "keywords": [
     "task-management",

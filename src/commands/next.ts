@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import { BeehiveApiClient } from '../api-client.js';
 import { ConfigManager } from '../config.js';
 import { formatJson, formatTask } from '../utils/output.js';
-import { loadRolePrompt } from '../utils/workflow.js';
+import { loadWorkflowContext } from '../utils/workflow.js';
 
 export function registerNextCommand(program: Command) {
   program
@@ -32,11 +32,11 @@ export function registerNextCommand(program: Command) {
           return;
         }
 
-        // Load role prompt if available
+        // Load full workflow context if available
         if (task.role) {
-          const rolePrompt = loadRolePrompt(config.workflow, task.role);
-          if (rolePrompt) {
-            task.rolePrompt = rolePrompt;
+          const context = loadWorkflowContext(config.workflow, task.role);
+          if (context.fullContext) {
+            task.rolePrompt = context.fullContext;
           }
         }
 
