@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import config from './config.js';
 
 const app = new Hono();
 
@@ -13,7 +14,7 @@ const TIMEOUT_MS = 15000;
 // Auth Middleware
 app.use('*', async (c, next) => {
   const auth = c.req.header('Authorization');
-  const apiKeys = (c.env.HIVE_API_KEYS || '').split(',').filter(Boolean);
+  const apiKeys = (config.HIVE_API_KEYS || '').split(',').filter(Boolean);
   
   if (!auth || !auth.startsWith('Bearer ') || !apiKeys.includes(auth.substring(7))) {
     return c.json({ error: 'Unauthorized' }, 401);
@@ -52,7 +53,7 @@ app.post('/send', async (c) => {
   const { target, text, sender } = await c.req.json();
   if (!target || !text || !sender) return c.json({ error: 'Missing fields' }, 400);
   
-  const groups = JSON.parse(c.env.HIVE_GROUPS || '{}');
+  const groups = config.HIVE_GROUPS || {};
   const isGroup = !!groups[target];
   let recipients = isGroup ? groups[target] : [target];
   

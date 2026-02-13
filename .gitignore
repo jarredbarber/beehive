@@ -5,3 +5,4 @@ dist/
 .bh/
 *.log
 .DS_Store
+config.js
