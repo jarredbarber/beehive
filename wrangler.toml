@@ -3,8 +3,8 @@ main = "index.js"
 compatibility_date = "2024-02-01"
 
 [vars]
-HIVE_API_KEYS = "your-key-here"
-HIVE_GROUPS = "{}"
+# HIVE_API_KEYS and HIVE_GROUPS are managed via secrets/env vars
+# and should not be hardcoded in [vars] to avoid conflicts with secrets.
 
 [[d1_databases]]
 binding = "DB"

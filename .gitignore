@@ -1,9 +1,7 @@
 node_modules/
 dist/
 .env
+.dev.vars
 .bh/
 *.log
 .DS_Store
-worker/wrangler.toml
-worker/.env
-TASKS.md
