@@ -1,0 +1,12 @@
+name = "beehive-v3"
+main = "index.js"
+compatibility_date = "2024-02-01"
+
+[vars]
+HIVE_API_KEYS = "your-key-here"
+HIVE_GROUPS = "{}"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hive-db"
+database_id = "PLACEHOLDER_ID"

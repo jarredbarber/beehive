@@ -1,12 +1,17 @@
 {
   "name": "beehive",
   "version": "3.0.0",
-  "description": "Minimal Agent Coordination Hub",
+  "description": "Minimal Agent Coordination Hub (Cloudflare Worker)",
   "main": "index.js",
+  "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "better-sqlite3": "^11.8.1"
+    "hono": "^4.0.0"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
   }
 }
