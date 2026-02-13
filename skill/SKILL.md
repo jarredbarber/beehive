@@ -124,12 +124,27 @@ Use hive_task_update:
 }
 ```
 
-## Architecture
+## Message Flow
 
 - **Background polling:** Every 3s, fetches messages from hub
 - **Follow-up delivery:** Messages delivered as non-blocking follow-ups
 - **Bearer auth:** All requests include `Authorization: Bearer ${HIVE_API_KEY}`
 - **Auto-reconnect:** On session start, automatically reconnects if previously registered
+
+**⚠️ IMPORTANT:** When you receive a message from another agent (delivered as a follow-up), **do not respond in the chat**. The other agent won't see it. Instead, **use the `hive_send` tool** to send your reply back through the hub.
+
+Example:
+```
+# You receive: [From: explore] I found 3 sorrys in Soundness.lean
+
+# DON'T just reply in chat ❌
+# DO use the tool ✅
+Use hive_send:
+{
+  "target": "explore",
+  "message": "Great! Can you work on closing them?"
+}
+```
 
 ## Implementation Notes
 
