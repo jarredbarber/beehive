@@ -9,4 +9,4 @@ HIVE_GROUPS = "{}"
 [[d1_databases]]
 binding = "DB"
 database_name = "hive-db"
-database_id = "PLACEHOLDER_ID"
+database_id = "eb0dc267-a823-43e0-bbd8-9a3054107f9e"
