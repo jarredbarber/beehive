@@ -27,9 +27,10 @@ async function request(path, method = 'GET', body) {
 }
 
 const commands = {
-    async agents() {
-        const data = await request('/agents');
-        console.log('Online agents:');
+    async agents(name) {
+        const query = name ? `?name=${name}` : '';
+        const data = await request(`/agents${query}`);
+        console.log(name ? `Online agents visible to "${name}":` : 'All online agents:');
         data.agents.forEach(a => console.log(`  ${a}`));
     },
 

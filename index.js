@@ -46,11 +46,25 @@ app.post('/join', async (c) => {
 
 // GET /agents
 app.get('/agents', (c) => {
+  const name = c.req.query('name');
   const now = Date.now();
-  const online = Array.from(agents.entries())
+  const allAgents = Array.from(agents.entries())
     .filter(([_, info]) => now - info.lastSeen < TIMEOUT_MS)
-    .map(([name]) => name);
-  return c.json({ agents: online });
+    .map(([n]) => n);
+
+  if (!name) return c.json({ agents: allAgents });
+
+  const myGroups = groupMemberships.get(name) || new Set();
+  const visible = allAgents.filter(a => {
+    if (a === name) return true;
+    const theirGroups = groupMemberships.get(a) || new Set();
+    for (const g of myGroups) {
+      if (theirGroups.has(g)) return true;
+    }
+    return false;
+  });
+
+  return c.json({ agents: visible });
 });
 
 // GET /groups/:name - return which groups an agent is in

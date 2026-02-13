@@ -112,7 +112,8 @@ export default (pi: ExtensionAPI) => {
         description: "Lists all currently online agents.",
         parameters: Type.Object({}),
         async execute() {
-            const data = await hubRequest('/agents');
+            const query = myName ? `?name=${myName}` : '';
+            const data = await hubRequest(`/agents${query}`);
             if (!data) return { content: [{ type: "text", text: "Error: Hive hub unreachable." }], isError: true };
 
             const list = data.agents.map((a: string) => a === myName ? `${a} (you)` : a);
