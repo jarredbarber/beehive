@@ -1,41 +1,12 @@
 {
   "name": "beehive",
-  "version": "0.1.0",
-  "description": "Distributed task coordination server for AI agents",
-  "type": "module",
-  "bin": {
-    "bh": "./dist/index.js"
-  },
+  "version": "3.0.0",
+  "description": "Minimal Agent Coordination Hub",
+  "main": "index.js",
   "scripts": {
-    "build": "tsc && chmod +x dist/index.js",
-    "dev": "tsx src/index.ts",
-    "test": "tsx --test src/**/*.test.ts"
+    "start": "node index.js"
   },
-  "keywords": [
-    "task-management",
-    "distributed",
-    "coordination",
-    "ai-agents",
-    "workflow"
-  ],
-  "author": "Jarred Barber",
-  "license": "MIT",
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "^0.52.9",
-    "@octokit/rest": "^22.0.1",
-    "commander": "^12.1.0",
-    "dotenv": "^17.2.4",
-    "fastify": "^5.7.4",
-    "gray-matter": "^4.0.3",
-    "js-yaml": "^4.1.1",
-    "json5": "^2.2.3",
-    "proper-lockfile": "^4.1.2"
-  },
-  "devDependencies": {
-    "@types/js-yaml": "^4.0.9",
-    "@types/node": "^22.10.5",
-    "@types/proper-lockfile": "^4.1.4",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "better-sqlite3": "^11.8.1"
   }
 }

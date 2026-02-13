@@ -1,5 +1,0 @@
-{
-  "description": "Performance audit\nProfile application performance and identify bottlenecks. Analyze memory usage, CPU time, and network requests.",
-  "role": "code",
-  "priority": 2
-}
