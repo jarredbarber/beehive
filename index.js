@@ -8,6 +8,7 @@ const app = new Hono();
 // Durable Objects or KV would be required.
 const agents = new Map(); // name -> { lastSeen: timestamp }
 const messages = new Map(); // name -> Array<{ sender, text, group?, timestamp }>
+const groupMemberships = new Map(); // name -> Set<groupName>
 
 const TIMEOUT_MS = 15000;
 
@@ -30,6 +31,19 @@ app.post('/register', async (c) => {
   return c.json({ status: 'registered' });
 });
 
+// POST /join - agent joins a group
+app.post('/join', async (c) => {
+  const { name, group } = await c.req.json();
+  if (!name || !group) return c.json({ error: 'name and group required' }, 400);
+  
+  if (!groupMemberships.has(name)) {
+    groupMemberships.set(name, new Set());
+  }
+  groupMemberships.get(name).add(group);
+  
+  return c.json({ status: 'joined', group });
+});
+
 // GET /agents
 app.get('/agents', (c) => {
   const now = Date.now();
@@ -37,6 +51,13 @@ app.get('/agents', (c) => {
     .filter(([_, info]) => now - info.lastSeen < TIMEOUT_MS)
     .map(([name]) => name);
   return c.json({ agents: online });
+});
+
+// GET /groups/:name - return which groups an agent is in
+app.get('/groups/:name', (c) => {
+  const name = c.req.param('name');
+  const groups = groupMemberships.get(name);
+  return c.json({ groups: groups ? Array.from(groups) : [] });
 });
 
 // GET /messages/:name
@@ -53,12 +74,20 @@ app.post('/send', async (c) => {
   const { target, text, sender } = await c.req.json();
   if (!target || !text || !sender) return c.json({ error: 'Missing fields' }, 400);
   
-  const groups = config.HIVE_GROUPS || {};
-  const isGroup = !!groups[target];
-  let recipients = isGroup ? groups[target] : [target];
-  
+  // Check if target is a group by finding members
   const now = Date.now();
-  recipients = recipients.filter(r => r !== sender && (!isGroup || (agents.has(r) && (now - agents.get(r).lastSeen < TIMEOUT_MS))));
+  const groupMembers = [];
+  for (const [agentName, agentGroups] of groupMemberships.entries()) {
+    if (agentGroups.has(target) && agentName !== sender) {
+      const info = agents.get(agentName);
+      if (info && (now - info.lastSeen < TIMEOUT_MS)) {
+        groupMembers.push(agentName);
+      }
+    }
+  }
+
+  const isGroup = groupMembers.length > 0;
+  const recipients = isGroup ? groupMembers : [target];
   
   recipients.forEach(r => {
     const q = messages.get(r) || [];
