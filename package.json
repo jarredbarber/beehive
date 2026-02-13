@@ -4,6 +4,9 @@
   "description": "Minimal Agent Coordination Hub (Cloudflare Worker)",
   "main": "index.js",
   "type": "module",
+  "bin": {
+    "bh": "./cli.js"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
